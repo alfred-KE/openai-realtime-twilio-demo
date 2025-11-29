@@ -33,6 +33,21 @@ app.use(express.urlencoded({ extended: false }));
 const twimlPath = join(__dirname, "twiml.xml");
 const twimlTemplate = readFileSync(twimlPath, "utf-8");
 
+app.get("/", (req, res) => {
+  res.json({
+    status: "running",
+    endpoints: {
+      publicUrl: "/public-url",
+      twiml: "/twiml",
+      tools: "/tools",
+      websockets: {
+        call: "wss://[host]/call",
+        logs: "wss://[host]/logs",
+      },
+    },
+  });
+});
+
 app.get("/public-url", (req, res) => {
   res.json({ publicUrl: PUBLIC_URL });
 });
@@ -58,7 +73,10 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
   const parts = url.pathname.split("/").filter(Boolean);
 
+  console.log("WebSocket connection received:", req.url);
+
   if (parts.length < 1) {
+    console.log("Invalid connection path, closing");
     ws.close();
     return;
   }
@@ -66,14 +84,17 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const type = parts[0];
 
   if (type === "call") {
+    console.log("Twilio call connection");
     if (currentCall) currentCall.close();
     currentCall = ws;
     handleCallConnection(currentCall, OPENAI_API_KEY);
   } else if (type === "logs") {
+    console.log("Frontend logs connection");
     if (currentLogs) currentLogs.close();
     currentLogs = ws;
     handleFrontendConnection(currentLogs);
   } else {
+    console.log("Unknown connection type:", type);
     ws.close();
   }
 });

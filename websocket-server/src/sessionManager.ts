@@ -16,13 +16,18 @@ interface Session {
 let session: Session = {};
 
 export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
+  console.log("Twilio call connection received");
   cleanupConnection(session.twilioConn);
   session.twilioConn = ws;
   session.openAIApiKey = openAIApiKey;
 
   ws.on("message", handleTwilioMessage);
-  ws.on("error", ws.close);
+  ws.on("error", (err) => {
+    console.error("Twilio connection error:", err);
+    ws.close();
+  });
   ws.on("close", () => {
+    console.log("Twilio connection closed");
     cleanupConnection(session.modelConn);
     cleanupConnection(session.twilioConn);
     session.twilioConn = undefined;
@@ -77,10 +82,15 @@ async function handleFunctionCall(item: { name: string; arguments: string }) {
 
 function handleTwilioMessage(data: RawData) {
   const msg = parseMessage(data);
-  if (!msg) return;
+  if (!msg) {
+    console.log("Failed to parse Twilio message");
+    return;
+  }
 
+  console.log("Twilio message received:", msg.event);
   switch (msg.event) {
     case "start":
+      console.log("Twilio stream started, streamSid:", msg.start?.streamSid);
       session.streamSid = msg.start.streamSid;
       session.latestMediaTimestamp = 0;
       session.lastAssistantItem = undefined;
@@ -94,9 +104,12 @@ function handleTwilioMessage(data: RawData) {
           type: "input_audio_buffer.append",
           audio: msg.media.payload,
         });
+      } else {
+        console.log("Model connection not open, dropping audio");
       }
       break;
     case "close":
+      console.log("Twilio stream closed");
       closeAllConnections();
       break;
   }
@@ -116,10 +129,20 @@ function handleFrontendMessage(data: RawData) {
 }
 
 function tryConnectModel() {
-  if (!session.twilioConn || !session.streamSid || !session.openAIApiKey)
+  if (!session.twilioConn || !session.streamSid || !session.openAIApiKey) {
+    console.log("Cannot connect model: missing requirements", {
+      hasTwilioConn: !!session.twilioConn,
+      hasStreamSid: !!session.streamSid,
+      hasApiKey: !!session.openAIApiKey,
+    });
     return;
-  if (isOpen(session.modelConn)) return;
+  }
+  if (isOpen(session.modelConn)) {
+    console.log("Model connection already open");
+    return;
+  }
 
+  console.log("Connecting to OpenAI Realtime API...");
   session.modelConn = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
     {
@@ -131,7 +154,12 @@ function tryConnectModel() {
   );
 
   session.modelConn.on("open", () => {
+    console.log("OpenAI Realtime API connected");
     const config = session.saved_config || {};
+    
+    // Import functions to get their schemas
+    const functionSchemas = functions.map((f) => f.schema);
+    
     jsonSend(session.modelConn, {
       type: "session.update",
       session: {
@@ -141,24 +169,48 @@ function tryConnectModel() {
         input_audio_transcription: { model: "whisper-1" },
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
+        tools: functionSchemas.length > 0 ? functionSchemas : undefined,
         ...config,
       },
     });
+    console.log("Session update sent, waiting for confirmation...");
   });
 
   session.modelConn.on("message", handleModelMessage);
-  session.modelConn.on("error", closeModel);
-  session.modelConn.on("close", closeModel);
+  session.modelConn.on("error", (err) => {
+    console.error("OpenAI Realtime API error:", err);
+    closeModel();
+  });
+  session.modelConn.on("close", (code, reason) => {
+    console.log("OpenAI Realtime API closed:", code, reason.toString());
+    closeModel();
+  });
 }
 
 function handleModelMessage(data: RawData) {
   const event = parseMessage(data);
-  if (!event) return;
+  if (!event) {
+    console.log("Failed to parse model message");
+    return;
+  }
+
+  console.log("Model event received:", event.type);
 
   jsonSend(session.frontendConn, event);
 
   switch (event.type) {
+    case "session.updated":
+      console.log("Session updated confirmed, starting response...");
+      // Now that session is confirmed, start the response to begin listening
+      jsonSend(session.modelConn, { type: "response.create" });
+      break;
+
+    case "response.created":
+      console.log("Response created, model is now listening");
+      break;
+
     case "input_audio_buffer.speech_started":
+      console.log("Speech detected, handling truncation");
       handleTruncation();
       break;
 
@@ -179,12 +231,15 @@ function handleModelMessage(data: RawData) {
           event: "mark",
           streamSid: session.streamSid,
         });
+      } else {
+        console.log("Cannot send audio: missing twilioConn or streamSid");
       }
       break;
 
     case "response.output_item.done": {
       const { item } = event;
       if (item.type === "function_call") {
+        console.log("Function call completed:", item.name);
         handleFunctionCall(item)
           .then((output) => {
             if (session.modelConn) {
@@ -205,6 +260,17 @@ function handleModelMessage(data: RawData) {
       }
       break;
     }
+
+    case "error":
+      console.error("Model error:", event);
+      break;
+
+    default:
+      // Log unhandled event types for debugging
+      if (!event.type.startsWith("response.audio_transcript")) {
+        console.log("Unhandled event type:", event.type);
+      }
+      break;
   }
 }
 
