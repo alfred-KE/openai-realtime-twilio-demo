@@ -197,9 +197,13 @@ function tryConnectModel() {
       type: "session.update",
       session: {
         modalities: ["text", "audio"],
-        turn_detection: { type: "server_vad" },
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.8,                 // moins sensible → évite les coupures
+          silence_duration_ms: 650        // attend plus longtemps avant de considérer que tu as fini
+        },
         voice: "ash",
-        input_audio_transcription: { model: "whisper-1" },
+        input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         tools: functionSchemas.length > 0 ? functionSchemas : undefined,
