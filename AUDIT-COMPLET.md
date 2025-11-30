@@ -282,3 +282,5 @@ Les problèmes identifiés suggèrent que le modèle OpenAI peut être dans un �
 
 **Action immédiate recommandée:** Implémenter le buffer d'audio et la vérification de `response.created`.
 
+
+

@@ -122,3 +122,5 @@ Si rien ne fonctionne :
 2. Testez les endpoints : `./test-endpoints.sh`
 3. Consultez le guide de dépannage : `cat TROUBLESHOOTING.md`
 
+
+

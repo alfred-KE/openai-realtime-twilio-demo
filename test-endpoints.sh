@@ -96,3 +96,5 @@ echo ""
 echo "📋 Pour voir le guide de dépannage:"
 echo "   cat TROUBLESHOOTING.md"
 
+
+

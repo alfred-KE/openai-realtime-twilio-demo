@@ -104,3 +104,5 @@ grep -E "(OpenAI|Connecting to|Model event|session.updated|response.created)" lo
 2. Vérifiez que le modèle écoute (log "Response created, model is now listening")
 3. Vérifiez que l'audio est envoyé depuis Twilio (event "media")
 
+
+

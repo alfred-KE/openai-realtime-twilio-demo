@@ -93,3 +93,5 @@ echo ""
 echo "   3. Pour voir le diagnostic complet:"
 echo "      cat DIAGNOSTIC.md"
 
+
+
