@@ -206,6 +206,12 @@ function tryConnectModel() {
         input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
+        conversation_mode: "assistant",
+        conversation: {
+          memory: true,
+          max_items: 50,
+          truncate: "first",
+        },
         tools: functionSchemas.length > 0 ? functionSchemas : undefined,
         ...config,
       },
