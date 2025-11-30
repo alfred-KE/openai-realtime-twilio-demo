@@ -29,3 +29,18 @@ export interface FunctionHandler {
   schema: FunctionSchema;
   handler: (args: any) => Promise<string>;
 }
+
+export interface Item {
+  id: string;
+  object?: string;
+  type: "message" | "function_call" | "function_call_output";
+  timestamp?: string;
+  status?: "running" | "completed";
+  role?: "system" | "user" | "assistant" | "tool";
+  content?: { type: string; text: string }[];
+  name?: string;
+  call_id?: string;
+  params?: Record<string, any>;
+  output?: string;
+  streamSid?: string;
+}

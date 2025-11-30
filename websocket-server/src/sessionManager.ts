@@ -1,5 +1,7 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
+import * as db from "./database";
+import { Item } from "./types";
 
 interface Session {
   twilioConn?: WebSocket;
@@ -17,6 +19,12 @@ interface Session {
   responseCreated: boolean;
   // NOUVEAU: Timeout pour response.create
   responseCreateTimeout?: NodeJS.Timeout;
+  // NOUVEAU: Pour la sauvegarde des conversations
+  conversationId?: number;
+  phoneNumber?: string;
+  phoneNumberSid?: string;
+  callerNumber?: string;
+  items: Item[]; // Stocker les items pour sauvegarde
 }
 
 // Map pour gérer plusieurs sessions simultanées (clé = streamSid)
@@ -26,23 +34,46 @@ const sessions = new Map<string, Session>();
 let frontendSession: Session = {
   audioBuffer: [],
   responseCreated: false,
+  items: [],
 };
 
 // Fonction helper pour obtenir ou créer une session
-function getOrCreateSession(streamSid: string, openAIApiKey: string, twilioConn: WebSocket): Session {
+function getOrCreateSession(streamSid: string, openAIApiKey: string, twilioConn: WebSocket, phoneNumber?: string, phoneNumberSid?: string, callerNumber?: string): Session {
   if (!sessions.has(streamSid)) {
-    sessions.set(streamSid, {
+    const session: Session = {
       audioBuffer: [],
       responseCreated: false,
       streamSid,
       openAIApiKey,
       twilioConn,
-    });
+      phoneNumber: phoneNumber || "unknown",
+      phoneNumberSid,
+      callerNumber,
+      items: [],
+    };
+    
+    // Démarrer la conversation dans la base de données
+    try {
+      session.conversationId = db.startConversation(
+        streamSid,
+        session.phoneNumber || "unknown",
+        phoneNumberSid,
+        callerNumber
+      );
+      console.log(`[${streamSid}] Started conversation in database (ID: ${session.conversationId})`);
+    } catch (err) {
+      console.error(`[${streamSid}] Error starting conversation:`, err);
+    }
+    
+    sessions.set(streamSid, session);
     console.log(`Created new session for streamSid: ${streamSid}`);
   }
   const session = sessions.get(streamSid)!;
   session.twilioConn = twilioConn;
   session.openAIApiKey = openAIApiKey;
+  if (phoneNumber) session.phoneNumber = phoneNumber;
+  if (phoneNumberSid) session.phoneNumberSid = phoneNumberSid;
+  if (callerNumber) session.callerNumber = callerNumber;
   return session;
 }
 
@@ -56,6 +87,32 @@ function getSession(streamSid?: string): Session | null {
 function cleanupSession(streamSid: string) {
   const session = sessions.get(streamSid);
   if (session) {
+    // Sauvegarder tous les items dans la base de données avant de nettoyer
+    if (session.conversationId && session.items && session.items.length > 0) {
+      try {
+        console.log(`[${streamSid}] Saving ${session.items.length} items to database before cleanup`);
+        db.saveConversationItems(session.conversationId, session.items);
+        
+        // Compter les messages pour mettre à jour la conversation
+        const messageCount = session.items.filter((item) => item.type === "message").length;
+        db.endConversation(streamSid, messageCount);
+        
+        console.log(`[${streamSid}] Conversation saved and ended in database`);
+      } catch (err) {
+        console.error(`[${streamSid}] Error saving conversation items:`, err);
+      }
+    }
+    
+    // Envoyer un événement au frontend pour indiquer que l'appel est terminé
+    if (frontendSession.frontendConn && isOpen(frontendSession.frontendConn)) {
+      jsonSend(frontendSession.frontendConn, {
+        type: "call.ended",
+        streamSid: streamSid,
+        message: "Call ended",
+      });
+      console.log(`[${streamSid}] Sent call.ended event to frontend`);
+    }
+    
     cleanupConnection(session.modelConn);
     cleanupConnection(session.twilioConn);
     if (session.responseCreateTimeout) {
@@ -83,7 +140,18 @@ export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
     if (msg.event === "start" && msg.start?.streamSid) {
       const streamSid = msg.start.streamSid;
       tempStreamSid = streamSid;
-      const session = getOrCreateSession(streamSid, openAIApiKey, ws);
+      // Extraire les infos du message start (numéro appelé, appelant, etc.)
+      // Twilio envoie les customParameters depuis le TwiML
+      const phoneNumber = msg.start?.customParameters?.phoneNumber || 
+                         msg.start?.accountSid || 
+                         "unknown";
+      const phoneNumberSid = msg.start?.customParameters?.phoneNumberSid || "";
+      const callerNumber = msg.start?.customParameters?.callerNumber || 
+                          msg.start?.callSid || 
+                          "unknown";
+      
+      console.log(`[${streamSid}] Call info - Phone: ${phoneNumber}, Caller: ${callerNumber}`);
+      const session = getOrCreateSession(streamSid, openAIApiKey, ws, phoneNumber, phoneNumberSid, callerNumber);
       handleTwilioMessage(data, session);
     } else if (tempStreamSid) {
       // Pour les autres messages, utiliser la session existante
@@ -170,6 +238,10 @@ function handleTwilioMessage(data: RawData, session: Session) {
       session.responseStartTimestamp = undefined;
       session.audioBuffer = [];
       session.responseCreated = false;
+      // Initialiser le tableau d'items si pas déjà fait
+      if (!session.items) {
+        session.items = [];
+      }
       tryConnectModel(session);
       break;
     case "media":
@@ -353,6 +425,33 @@ function handleModelMessage(data: RawData, session: Session) {
     streamSid: session.streamSid,
   };
   jsonSend(frontendSession.frontendConn, eventWithStreamSid);
+
+  // Stocker les items créés dans session.items pour sauvegarde
+  if (event.type === "conversation.item.created" && event.item) {
+    if (!session.items) {
+      session.items = [];
+    }
+    // Convertir l'item OpenAI en format Item pour la sauvegarde
+    const item: Item = {
+      id: event.item.id,
+      type: event.item.type === "message" ? "message" : 
+            event.item.type === "function_call" ? "function_call" :
+            event.item.type === "function_call_output" ? "function_call_output" : 
+            event.item.type as any,
+      role: event.item.role,
+      content: event.item.content || [],
+      status: event.item.status,
+      timestamp: new Date().toISOString(),
+      streamSid: session.streamSid,
+      call_id: event.item.call_id,
+      name: event.item.name,
+      params: event.item.input,
+      output: typeof event.item.output === "string" ? event.item.output : 
+              event.item.output ? JSON.stringify(event.item.output) : undefined,
+    };
+    session.items.push(item);
+    console.log(`[${session.streamSid}] Item stored in session.items:`, item.id, item.type);
+  }
 
   switch (event.type) {
     case "session.updated":

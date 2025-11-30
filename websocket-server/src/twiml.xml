@@ -2,7 +2,11 @@
 <Response>
 
   <Connect>
-    <Stream url="{{WS_URL}}" />
+    <Stream url="{{WS_URL}}">
+      <Parameter name="phoneNumber" value="{{PHONE_NUMBER}}" />
+      <Parameter name="phoneNumberSid" value="{{PHONE_NUMBER_SID}}" />
+      <Parameter name="callerNumber" value="{{CALLER_NUMBER}}" />
+    </Stream>
   </Connect>
 
 </Response>

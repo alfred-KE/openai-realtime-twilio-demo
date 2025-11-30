@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Request, Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import dotenv from "dotenv";
@@ -11,6 +11,7 @@ handleCallConnection,
 handleFrontendConnection,
 } from "./sessionManager";
 import functions from "./functionHandlers";
+import * as db from "./database";
 
 dotenv.config();
 
@@ -39,19 +40,121 @@ res.json({ publicUrl: PUBLIC_URL });
 
 app.all("/twiml", (req, res) => {
   console.log("TwiML requested from:", req.ip, req.headers["user-agent"]);
+  
+  // Extraire les infos de la requête Twilio
+  const phoneNumber = req.body?.Called || req.query?.Called || "unknown";
+  const phoneNumberSid = req.body?.CalledNumberSid || req.query?.CalledNumberSid || "";
+  const callerNumber = req.body?.Caller || req.query?.Caller || "unknown";
+  
   const wsUrl = new URL(PUBLIC_URL);
   wsUrl.protocol = "wss:";
   wsUrl.pathname = `/call`;
 
   const finalUrl = wsUrl.toString();
   console.log("WebSocket URL for Twilio:", finalUrl);
-  const twimlContent = twimlTemplate.replace("{{WS_URL}}", finalUrl);
+  console.log("Phone number:", phoneNumber, "Caller:", callerNumber);
+  
+  let twimlContent = twimlTemplate.replace("{{WS_URL}}", finalUrl);
+  twimlContent = twimlContent.replace("{{PHONE_NUMBER}}", phoneNumber);
+  twimlContent = twimlContent.replace("{{PHONE_NUMBER_SID}}", phoneNumberSid);
+  twimlContent = twimlContent.replace("{{CALLER_NUMBER}}", callerNumber);
+  
   res.type("text/xml").send(twimlContent);
 });
 
 // New endpoint to list available tools (schemas)
 app.get("/tools", (req, res) => {
 res.json(functions.map((f) => f.schema));
+});
+
+// API endpoints for conversation history
+app.get("/api/conversations", (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 100;
+    const conversations = db.getAllConversations(limit);
+    res.json(conversations);
+  } catch (err: any) {
+    console.error("Error getting conversations:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/conversations/phone/:phoneNumber", (req, res) => {
+  try {
+    const { phoneNumber } = req.params;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const conversations = db.getConversationsByPhoneNumber(phoneNumber, limit);
+    res.json(conversations);
+  } catch (err: any) {
+    console.error("Error getting conversations by phone:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/conversations/phone-sid/:phoneNumberSid", (req, res) => {
+  try {
+    const { phoneNumberSid } = req.params;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const conversations = db.getConversationsByPhoneNumberSid(phoneNumberSid, limit);
+    res.json(conversations);
+  } catch (err: any) {
+    console.error("Error getting conversations by phone SID:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/conversations/stream/:streamSid", (req, res) => {
+  try {
+    const { streamSid } = req.params;
+    const conversation = db.getConversationByStreamSid(streamSid);
+    if (!conversation) {
+      res.status(404).json({ error: "Conversation not found" });
+      return;
+    }
+    const items = db.getConversationItems(conversation.id);
+    res.json({ ...conversation, items });
+  } catch (err: any) {
+    console.error("Error getting conversation:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/conversations/stream/:streamSid", (req, res) => {
+  try {
+    const { streamSid } = req.params;
+    const deleted = db.deleteConversation(streamSid);
+    if (deleted) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: "Conversation not found" });
+    }
+  } catch (err: any) {
+    console.error("Error deleting conversation:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save items for a conversation (called from frontend)
+app.post("/api/conversations/stream/:streamSid/items", (req, res) => {
+  try {
+    const { streamSid } = req.params;
+    const { items } = req.body;
+    
+    const conversation = db.getConversationByStreamSid(streamSid);
+    if (!conversation) {
+      res.status(404).json({ error: "Conversation not found" });
+      return;
+    }
+    
+    if (Array.isArray(items) && items.length > 0) {
+      db.saveConversationItems(conversation.id, items);
+    }
+    
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Error saving conversation items:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Set pour gérer plusieurs connexions d'appels simultanées

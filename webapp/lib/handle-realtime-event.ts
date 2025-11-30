@@ -42,6 +42,14 @@ export default function handleRealtimeEvent(
   const eventStreamSid = ev.streamSid || streamSid;
 
   switch (type) {
+    case "call.ended": {
+      // Retirer tous les items de cet appel de la liste
+      if (eventStreamSid) {
+        setItems((prev) => prev.filter((item) => item.streamSid !== eventStreamSid));
+        console.log(`Call ended for streamSid: ${eventStreamSid}, items removed from live transcript`);
+      }
+      break;
+    }
     case "session.created": {
       // Starting a new session, clear items for this streamSid only
       if (eventStreamSid) {

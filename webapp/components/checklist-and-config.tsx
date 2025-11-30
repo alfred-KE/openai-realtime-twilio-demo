@@ -19,18 +19,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getPublicUrlEndpoint } from "@/lib/websocket-url";
+import { getPublicUrlEndpoint, getApiUrl } from "@/lib/websocket-url";
 
 export default function ChecklistAndConfig({
   ready,
   setReady,
   selectedPhoneNumber,
   setSelectedPhoneNumber,
+  selectedPhoneNumberSid,
+  setSelectedPhoneNumberSid,
 }: {
   ready: boolean;
   setReady: (val: boolean) => void;
   selectedPhoneNumber: string;
   setSelectedPhoneNumber: (val: string) => void;
+  selectedPhoneNumberSid: string;
+  setSelectedPhoneNumberSid: (val: string) => void;
 }) {
   const [hasCredentials, setHasCredentials] = useState(false);
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
@@ -39,11 +43,9 @@ export default function ChecklistAndConfig({
 
   const [publicUrl, setPublicUrl] = useState("");
   const [localServerUp, setLocalServerUp] = useState(false);
-  const [publicUrlAccessible, setPublicUrlAccessible] = useState(false);
 
   const [allChecksPassed, setAllChecksPassed] = useState(false);
   const [webhookLoading, setWebhookLoading] = useState(false);
-  const [ngrokLoading, setNgrokLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const appendedTwimlUrl = publicUrl ? `${publicUrl}/twiml` : "";
@@ -83,6 +85,7 @@ export default function ChecklistAndConfig({
               const first = numbersData[0];
               setCurrentVoiceUrl(first.voiceUrl || "");
               setSelectedPhoneNumber(first.friendlyName || "");
+              setSelectedPhoneNumberSid(first.sid || "");
               return first.sid;
             }
             const selected = numbersData.find((p: PhoneNumber) => p.sid === prevSid);
@@ -100,12 +103,14 @@ export default function ChecklistAndConfig({
                 }
                 return prevName;
               });
+              setSelectedPhoneNumberSid(selected.sid || "");
               return prevSid; // Keep the same selection
             }
             // Selected number no longer exists, use first
             const first = numbersData[0];
             setCurrentVoiceUrl(first.voiceUrl || "");
             setSelectedPhoneNumber(first.friendlyName || "");
+            setSelectedPhoneNumberSid(first.sid || "");
             return first.sid;
           });
         }
@@ -113,7 +118,12 @@ export default function ChecklistAndConfig({
         // 3. Check local server & public URL
         let foundPublicUrl = "";
         try {
-          const resLocal = await fetch(getPublicUrlEndpoint());
+          const resLocal = await fetch(getPublicUrlEndpoint(), {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+            // Add timeout to avoid hanging
+            signal: AbortSignal.timeout(3000),
+          });
           if (resLocal.ok) {
             const pubData = await resLocal.json();
             foundPublicUrl = pubData?.publicUrl || "";
@@ -127,14 +137,23 @@ export default function ChecklistAndConfig({
           } else {
             throw new Error("Local server not responding");
           }
-        } catch {
-          setLocalServerUp(false);
-          setPublicUrl((prevUrl) => {
-            if (prevUrl !== "") {
-              return "";
-            }
-            return prevUrl;
-          });
+        } catch (err) {
+          // Si le serveur n'est pas accessible, vérifier si on a une URL configurée dans l'env
+          // Utiliser getApiUrl pour obtenir l'URL de base configurée
+          const baseUrl = getApiUrl("").replace(/\/$/, "");
+          if (baseUrl && baseUrl !== "http://localhost:8081") {
+            // On a une URL configurée (probablement via Nginx), considérer que le serveur est accessible
+            setPublicUrl(baseUrl);
+            setLocalServerUp(true);
+          } else {
+            setLocalServerUp(false);
+            setPublicUrl((prevUrl) => {
+              if (prevUrl !== "") {
+                return "";
+              }
+              return prevUrl;
+            });
+          }
         }
       } catch (err) {
         console.error(err);
@@ -170,30 +189,6 @@ export default function ChecklistAndConfig({
     }
   };
 
-  const checkNgrok = async () => {
-    if (!localServerUp || !publicUrl) return;
-    setNgrokLoading(true);
-    let success = false;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const resTest = await fetch(publicUrl + "/public-url");
-        if (resTest.ok) {
-          setPublicUrlAccessible(true);
-          success = true;
-          break;
-        }
-      } catch {
-        // retry
-      }
-      if (i < 4) {
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-    }
-    if (!success) {
-      setPublicUrlAccessible(false);
-    }
-    setNgrokLoading(false);
-  };
 
   const deletePhoneNumber = async () => {
     if (!currentNumberSid) return;
@@ -210,6 +205,7 @@ export default function ChecklistAndConfig({
       setPhoneNumbers(phoneNumbers.filter((p) => p.sid !== currentNumberSid));
       setCurrentNumberSid("");
       setSelectedPhoneNumber("");
+      setSelectedPhoneNumberSid("");
       setCurrentVoiceUrl("");
     } catch (err) {
       console.error(err);
@@ -250,6 +246,7 @@ export default function ChecklistAndConfig({
                     const selected = phoneNumbers.find((p) => p.sid === value);
                     if (selected) {
                       setSelectedPhoneNumber(selected.friendlyName || "");
+                      setSelectedPhoneNumberSid(selected.sid || "");
                       setCurrentVoiceUrl(selected.voiceUrl || "");
                     }
                   }}
@@ -297,59 +294,47 @@ export default function ChecklistAndConfig({
           ),
       },
       {
-        label: "Start local WebSocket server",
-        done: localServerUp,
-        description: "cd websocket-server && npm run dev",
-        field: null,
-      },
-      {
-        label: "Start ngrok",
-        done: publicUrlAccessible,
-        description: "Then set ngrok URL in websocket-server/.env",
-        field: (
-          <div className="flex items-center gap-2 w-full">
-            <div className="flex-1">
-              <Input value={publicUrl} disabled />
-            </div>
-            <div className="flex-1">
-              <Button
-                variant="outline"
-                onClick={checkNgrok}
-                disabled={ngrokLoading || !localServerUp || !publicUrl}
-                className="w-full"
-              >
-                {ngrokLoading ? (
-                  <Loader2 className="mr-2 h-4 animate-spin" />
-                ) : (
-                  "Check ngrok"
-                )}
-              </Button>
-            </div>
+        label: "WebSocket server",
+        done: localServerUp || !!publicUrl,
+        description: "Server should be running and accessible",
+        field: localServerUp ? (
+          <div className="text-sm text-green-600">
+            ✓ Server accessible at {publicUrl || "localhost:8081"}
+          </div>
+        ) : publicUrl ? (
+          <div className="text-sm text-muted-foreground">
+            Server URL configured: {publicUrl}
+          </div>
+        ) : (
+          <div className="text-sm text-muted-foreground">
+            Check server connection...
           </div>
         ),
       },
       {
-        label: "Update webhook URL",
-        done: !!publicUrl && !isWebhookMismatch,
-        description: "Can also be done manually in console",
+        label: "Webhook URL",
+        done: !isWebhookMismatch || !currentNumberSid || !!publicUrl,
+        description: "Configured via Nginx (automatic)",
         field: (
           <div className="flex items-center gap-2 w-full">
             <div className="flex-1">
-              <Input value={currentVoiceUrl} disabled className="w-full" />
+              <Input value={currentVoiceUrl || appendedTwimlUrl || "Not configured"} disabled className="w-full" />
             </div>
-            <div className="flex-1">
-              <Button
-                onClick={updateWebhook}
-                disabled={webhookLoading}
-                className="w-full"
-              >
-                {webhookLoading ? (
-                  <Loader2 className="mr-2 h-4 animate-spin" />
-                ) : (
-                  "Update Webhook"
-                )}
-              </Button>
-            </div>
+            {isWebhookMismatch && currentNumberSid && publicUrl && (
+              <div className="flex-1">
+                <Button
+                  onClick={updateWebhook}
+                  disabled={webhookLoading}
+                  className="w-full"
+                >
+                  {webhookLoading ? (
+                    <Loader2 className="mr-2 h-4 animate-spin" />
+                  ) : (
+                    "Update Webhook"
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
         ),
       },
@@ -360,30 +345,18 @@ export default function ChecklistAndConfig({
     currentNumberSid,
     localServerUp,
     publicUrl,
-    publicUrlAccessible,
     currentVoiceUrl,
     isWebhookMismatch,
     appendedTwimlUrl,
     webhookLoading,
-    ngrokLoading,
     setSelectedPhoneNumber,
   ]);
 
   useEffect(() => {
-    setAllChecksPassed(checklist.every((item) => item.done));
-  }, [checklist]);
-
-  useEffect(() => {
-    if (!ready) {
-      checkNgrok();
-    }
-  }, [localServerUp, ready]);
-
-  useEffect(() => {
-    if (!allChecksPassed) {
-      setReady(false);
-    }
-  }, [allChecksPassed, setReady]);
+    // Ne pas bloquer si le serveur est accessible ou si on a un numéro configuré
+    const essentialChecks = hasCredentials && phoneNumbers.length > 0;
+    setAllChecksPassed(essentialChecks);
+  }, [hasCredentials, phoneNumbers.length]);
 
   const handleDone = () => setReady(true);
 
@@ -423,13 +396,12 @@ export default function ChecklistAndConfig({
           ))}
         </div>
 
-        <div className="mt-6 flex flex-col sm:flex-row sm:justify-end">
+        <div className="mt-6 flex flex-col sm:flex-row sm:justify-end gap-2">
           <Button
             variant="outline"
             onClick={handleDone}
-            disabled={!allChecksPassed}
           >
-            Let's go!
+            {allChecksPassed ? "Let's go!" : "Continue anyway"}
           </Button>
         </div>
       </DialogContent>
