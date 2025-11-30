@@ -54,7 +54,8 @@ app.get("/tools", (req, res) => {
 res.json(functions.map((f) => f.schema));
 });
 
-let currentCall: WebSocket | null = null;
+// Set pour gérer plusieurs connexions d'appels simultanées
+const activeCalls = new Set<WebSocket>();
 let currentLogs: WebSocket | null = null;
 
 wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
@@ -72,10 +73,15 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   console.log("Connection type:", type);
 
   if (type === "call") {
-    console.log("Twilio call connection");
-    if (currentCall) currentCall.close();
-    currentCall = ws;
-    handleCallConnection(currentCall, OPENAI_API_KEY);
+    console.log("Twilio call connection (multiple calls supported)");
+    activeCalls.add(ws);
+    handleCallConnection(ws, OPENAI_API_KEY);
+    
+    // Nettoyer quand la connexion se ferme
+    ws.on("close", () => {
+      activeCalls.delete(ws);
+      console.log(`Call connection closed. Active calls: ${activeCalls.size}`);
+    });
   } else if (type === "logs") {
     console.log("Frontend logs connection");
     if (currentLogs) currentLogs.close();

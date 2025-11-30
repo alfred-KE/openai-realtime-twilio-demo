@@ -19,59 +19,113 @@ interface Session {
   responseCreateTimeout?: NodeJS.Timeout;
 }
 
-let session: Session = {
+// Map pour gérer plusieurs sessions simultanées (clé = streamSid)
+const sessions = new Map<string, Session>();
+
+// Session partagée pour le frontend (une seule connexion frontend)
+let frontendSession: Session = {
   audioBuffer: [],
   responseCreated: false,
 };
 
-export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
-  console.log("Twilio call connection received");
-  cleanupConnection(session.twilioConn);
-  session.twilioConn = ws;
+// Fonction helper pour obtenir ou créer une session
+function getOrCreateSession(streamSid: string, openAIApiKey: string, twilioConn: WebSocket): Session {
+  if (!sessions.has(streamSid)) {
+    sessions.set(streamSid, {
+      audioBuffer: [],
+      responseCreated: false,
+      streamSid,
+      openAIApiKey,
+      twilioConn,
+    });
+    console.log(`Created new session for streamSid: ${streamSid}`);
+  }
+  const session = sessions.get(streamSid)!;
+  session.twilioConn = twilioConn;
   session.openAIApiKey = openAIApiKey;
-  // Réinitialiser les flags
-  session.audioBuffer = [];
-  session.responseCreated = false;
+  return session;
+}
 
-  ws.on("message", handleTwilioMessage);
-  ws.on("error", (err) => {
-    console.error("Twilio connection error:", err);
-    ws.close();
-  });
-  ws.on("close", () => {
-    console.log("Twilio connection closed");
+// Fonction helper pour obtenir une session par streamSid
+function getSession(streamSid?: string): Session | null {
+  if (!streamSid) return null;
+  return sessions.get(streamSid) || null;
+}
+
+// Fonction helper pour nettoyer une session
+function cleanupSession(streamSid: string) {
+  const session = sessions.get(streamSid);
+  if (session) {
     cleanupConnection(session.modelConn);
     cleanupConnection(session.twilioConn);
     if (session.responseCreateTimeout) {
       clearTimeout(session.responseCreateTimeout);
     }
-    session.twilioConn = undefined;
-    session.modelConn = undefined;
-    session.streamSid = undefined;
-    session.lastAssistantItem = undefined;
-    session.responseStartTimestamp = undefined;
-    session.latestMediaTimestamp = undefined;
-    session.audioBuffer = [];
-    session.responseCreated = false;
-    if (!session.frontendConn) session = { audioBuffer: [], responseCreated: false };
-  });
+    sessions.delete(streamSid);
+    console.log(`Cleaned up session for streamSid: ${streamSid}`);
+  }
 }
 
-export function handleFrontendConnection(ws: WebSocket) {
-  cleanupConnection(session.frontendConn);
-  session.frontendConn = ws;
+export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
+  console.log("Twilio call connection received");
+  
+  // Stocker temporairement la connexion Twilio jusqu'à ce qu'on reçoive le streamSid
+  let tempStreamSid: string | null = null;
 
-  ws.on("message", handleFrontendMessage);
+  ws.on("message", (data: RawData) => {
+    const msg = parseMessage(data);
+    if (!msg) {
+      console.log("Failed to parse Twilio message");
+      return;
+    }
+
+    // Si c'est un événement "start", on crée la session avec le streamSid
+    if (msg.event === "start" && msg.start?.streamSid) {
+      const streamSid = msg.start.streamSid;
+      tempStreamSid = streamSid;
+      const session = getOrCreateSession(streamSid, openAIApiKey, ws);
+      handleTwilioMessage(data, session);
+    } else if (tempStreamSid) {
+      // Pour les autres messages, utiliser la session existante
+      const session = getSession(tempStreamSid);
+      if (session) {
+        handleTwilioMessage(data, session);
+      } else {
+        console.log(`Session not found for streamSid: ${tempStreamSid}`);
+      }
+    } else {
+      console.log("Received message before streamSid, ignoring");
+    }
+  });
+
+  ws.on("error", (err) => {
+    console.error("Twilio connection error:", err);
+    ws.close();
+  });
+
   ws.on("close", () => {
-    cleanupConnection(session.frontendConn);
-    session.frontendConn = undefined;
-    if (!session.twilioConn && !session.modelConn) {
-      session = { audioBuffer: [], responseCreated: false };
+    console.log("Twilio connection closed");
+    if (tempStreamSid) {
+      cleanupSession(tempStreamSid);
     }
   });
 }
 
-async function handleFunctionCall(item: { name: string; arguments: string }) {
+export function handleFrontendConnection(ws: WebSocket) {
+  cleanupConnection(frontendSession.frontendConn);
+  frontendSession.frontendConn = ws;
+
+  ws.on("message", (data: RawData) => {
+    handleFrontendMessage(data);
+  });
+
+  ws.on("close", () => {
+    cleanupConnection(frontendSession.frontendConn);
+    frontendSession.frontendConn = undefined;
+  });
+}
+
+async function handleFunctionCall(item: { name: string; arguments: string }, session: Session) {
   console.log("Handling function call:", item);
   const fnDef = functions.find((f) => f.schema.name === item.name);
   if (!fnDef) {
@@ -99,31 +153,31 @@ async function handleFunctionCall(item: { name: string; arguments: string }) {
   }
 }
 
-function handleTwilioMessage(data: RawData) {
+function handleTwilioMessage(data: RawData, session: Session) {
   const msg = parseMessage(data);
   if (!msg) {
     console.log("Failed to parse Twilio message");
     return;
   }
 
-  console.log("Twilio message received:", msg.event);
+  console.log(`[${session.streamSid}] Twilio message received:`, msg.event);
   switch (msg.event) {
     case "start":
-      console.log("Twilio stream started, streamSid:", msg.start?.streamSid);
+      console.log(`[${session.streamSid}] Twilio stream started`);
       session.streamSid = msg.start.streamSid;
       session.latestMediaTimestamp = 0;
       session.lastAssistantItem = undefined;
       session.responseStartTimestamp = undefined;
       session.audioBuffer = [];
       session.responseCreated = false;
-      tryConnectModel();
+      tryConnectModel(session);
       break;
     case "media":
       session.latestMediaTimestamp = msg.media.timestamp;
       
       // CORRECTION: Bufferiser l'audio si response.created n'a pas encore été reçu
       if (!session.responseCreated) {
-        console.log("Buffering audio (response not created yet)");
+        console.log(`[${session.streamSid}] Buffering audio (response not created yet)`);
         session.audioBuffer.push({
           type: "input_audio_buffer.append",
           audio: msg.media.payload,
@@ -139,12 +193,14 @@ function handleTwilioMessage(data: RawData) {
           audio: msg.media.payload,
         });
       } else {
-        console.log("Model connection not open, dropping audio");
+        console.log(`[${session.streamSid}] Model connection not open, dropping audio`);
       }
       break;
     case "close":
-      console.log("Twilio stream closed");
-      closeAllConnections();
+      console.log(`[${session.streamSid}] Twilio stream closed`);
+      if (session.streamSid) {
+        cleanupSession(session.streamSid);
+      }
       break;
   }
 }
@@ -153,18 +209,56 @@ function handleFrontendMessage(data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
 
-  if (isOpen(session.modelConn)) {
-    jsonSend(session.modelConn, msg);
-  }
+  // Envoyer le message à toutes les sessions actives
+  sessions.forEach((session) => {
+    if (isOpen(session.modelConn)) {
+      jsonSend(session.modelConn, msg);
+    }
+  });
 
   if (msg.type === "session.update") {
-    session.saved_config = msg.session;
+    // Sauvegarder la config pour toutes les futures sessions
+    frontendSession.saved_config = msg.session;
+    
+    // Appliquer la nouvelle config à toutes les sessions actives
+    sessions.forEach((session) => {
+      if (isOpen(session.modelConn)) {
+        const functionSchemas = functions.map((f) => f.schema);
+        const defaultConfig = {
+          modalities: ["text", "audio"],
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.4,
+            silence_duration_ms: 1000,
+          },
+          voice: "ash",
+          temperature: 0.7,
+          input_audio_transcription: { model: "gpt-4o-transcribe" },
+          input_audio_format: "g711_ulaw",
+          output_audio_format: "g711_ulaw",
+        };
+        
+        const sessionConfig = {
+          ...defaultConfig,
+          ...msg.session,
+          turn_detection: msg.session.turn_detection || defaultConfig.turn_detection,
+          input_audio_transcription: msg.session.input_audio_transcription || defaultConfig.input_audio_transcription,
+          tools: functionSchemas.length > 0 ? functionSchemas : (msg.session.tools || undefined),
+        };
+        
+        jsonSend(session.modelConn, {
+          type: "session.update",
+          session: sessionConfig,
+        });
+        console.log(`[${session.streamSid}] Session config updated during active session`);
+      }
+    });
   }
 }
 
-function tryConnectModel() {
+function tryConnectModel(session: Session) {
   if (!session.twilioConn || !session.streamSid || !session.openAIApiKey) {
-    console.log("Cannot connect model: missing requirements", {
+    console.log(`[${session.streamSid}] Cannot connect model: missing requirements`, {
       hasTwilioConn: !!session.twilioConn,
       hasStreamSid: !!session.streamSid,
       hasApiKey: !!session.openAIApiKey,
@@ -172,13 +266,16 @@ function tryConnectModel() {
     return;
   }
   if (isOpen(session.modelConn)) {
-    console.log("Model connection already open");
+    console.log(`[${session.streamSid}] Model connection already open`);
     return;
   }
 
-  console.log("Connecting to OpenAI Realtime API...");
+  console.log(`[${session.streamSid}] Connecting to OpenAI Realtime API...`);
+  const config = session.saved_config || frontendSession.saved_config || {};
+  const model = config.model || "gpt-4o-realtime-preview-2024-12-17";
+  
   session.modelConn = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
+    `wss://api.openai.com/v1/realtime?model=${model}`,
     {
       headers: {
         Authorization: `Bearer ${session.openAIApiKey}`,
@@ -188,68 +285,89 @@ function tryConnectModel() {
   );
 
   session.modelConn.on("open", () => {
-    console.log("OpenAI Realtime API connected");
-    const config = session.saved_config || {};
+    console.log(`[${session.streamSid}] OpenAI Realtime API connected`);
     
     const functionSchemas = functions.map((f) => f.schema);
     
+    // Valeurs par défaut
+    const defaultConfig = {
+      modalities: ["text", "audio"],
+      turn_detection: {
+        type: "server_vad",
+        threshold: 0.4,
+        silence_duration_ms: 1000,
+      },
+      voice: "ash",
+      temperature: 0.7,
+      input_audio_transcription: { model: "gpt-4o-transcribe" },
+      input_audio_format: "g711_ulaw",
+      output_audio_format: "g711_ulaw",
+    };
+    
+    // Fusionner avec la config sauvegardée (priorité à la config)
+    const sessionConfig = {
+      ...defaultConfig,
+      ...config,
+      // S'assurer que turn_detection est bien fusionné
+      turn_detection: config.turn_detection || defaultConfig.turn_detection,
+      // S'assurer que input_audio_transcription est bien fusionné
+      input_audio_transcription: config.input_audio_transcription || defaultConfig.input_audio_transcription,
+      // Tools depuis les fonctions backend
+      tools: functionSchemas.length > 0 ? functionSchemas : (config.tools || undefined),
+    };
+    
     jsonSend(session.modelConn, {
       type: "session.update",
-      session: {
-        modalities: ["text", "audio"],
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.4,                 // Encore plus sensible → capture mieux toute la parole
-          silence_duration_ms: 1000       // Attend 1 seconde → évite de couper les phrases
-        },
-        voice: "ash",
-        temperature: 0.7,                // Plus naturel tout en restant cohérent
-        input_audio_transcription: { model: "gpt-4o-transcribe" },  // Modèle plus précis pour mieux comprendre
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
-        tools: functionSchemas.length > 0 ? functionSchemas : undefined,
-        ...config,
-      },
+      session: sessionConfig,
     });
-    console.log("Session update sent, waiting for confirmation...");
+    console.log(`[${session.streamSid}] Session update sent with config:`, sessionConfig);
   });
 
-  session.modelConn.on("message", handleModelMessage);
-  session.modelConn.on("error", (err) => {
-    console.error("OpenAI Realtime API error:", err);
-    closeModel();
+  session.modelConn.on("message", (data: RawData) => {
+    handleModelMessage(data, session);
   });
+  
+  session.modelConn.on("error", (err) => {
+    console.error(`[${session.streamSid}] OpenAI Realtime API error:`, err);
+    closeModel(session);
+  });
+  
   session.modelConn.on("close", (code, reason) => {
-    console.log("OpenAI Realtime API closed:", code, reason.toString());
-    closeModel();
+    console.log(`[${session.streamSid}] OpenAI Realtime API closed:`, code, reason.toString());
+    closeModel(session);
   });
 }
 
-function handleModelMessage(data: RawData) {
+function handleModelMessage(data: RawData, session: Session) {
   const event = parseMessage(data);
   if (!event) {
-    console.log("Failed to parse model message");
+    console.log(`[${session.streamSid}] Failed to parse model message`);
     return;
   }
 
-  console.log("Model event received:", event.type);
+  console.log(`[${session.streamSid}] Model event received:`, event.type);
 
-  jsonSend(session.frontendConn, event);
+  // Envoyer au frontend (une seule connexion frontend partagée) avec streamSid
+  const eventWithStreamSid = {
+    ...event,
+    streamSid: session.streamSid,
+  };
+  jsonSend(frontendSession.frontendConn, eventWithStreamSid);
 
   switch (event.type) {
     case "session.updated":
-      console.log("Session updated confirmed, starting response...");
+      console.log(`[${session.streamSid}] Session updated confirmed, starting response...`);
       // CORRECTION: Attendre un court délai avant d'envoyer response.create
       setTimeout(() => {
         if (isOpen(session.modelConn)) {
-          console.log("Sending response.create...");
+          console.log(`[${session.streamSid}] Sending response.create...`);
           jsonSend(session.modelConn, { type: "response.create" });
           
           // CORRECTION: Ajouter un timeout pour vérifier que response.created arrive
           session.responseCreateTimeout = setTimeout(() => {
             if (!session.responseCreated) {
-              console.error("TIMEOUT: response.created not received after 5 seconds");
-              console.error("Retrying response.create...");
+              console.error(`[${session.streamSid}] TIMEOUT: response.created not received after 5 seconds`);
+              console.error(`[${session.streamSid}] Retrying response.create...`);
               if (isOpen(session.modelConn)) {
                 jsonSend(session.modelConn, { type: "response.create" });
               }
@@ -260,12 +378,12 @@ function handleModelMessage(data: RawData) {
       break;
 
     case "response.created":
-      console.log("Response created, model is now listening");
+      console.log(`[${session.streamSid}] Response created, model is now listening`);
       session.responseCreated = true;
       
       // CORRECTION: Envoyer tous les messages audio bufferisés avec un délai pour simuler le flux réel
       if (session.audioBuffer.length > 0) {
-        console.log(`Sending ${session.audioBuffer.length} buffered audio messages (with delay to simulate real-time)`);
+        console.log(`[${session.streamSid}] Sending ${session.audioBuffer.length} buffered audio messages (with delay to simulate real-time)`);
         // Envoyer les messages avec un délai de 20ms entre chaque pour simuler le flux réel
         // Twilio envoie généralement des chunks toutes les 20ms
         session.audioBuffer.forEach((buffered, index) => {
@@ -289,13 +407,13 @@ function handleModelMessage(data: RawData) {
       break;
 
     case "input_audio_buffer.speech_started":
-      console.log("Speech detected, handling truncation");
-      handleTruncation();
+      console.log(`[${session.streamSid}] Speech detected, handling truncation`);
+      handleTruncation(session);
       break;
 
     // CORRECTION: Ajouter handler pour response.output_item.added
     case "response.output_item.added":
-      console.log("Response output item added:", event.item?.type);
+      console.log(`[${session.streamSid}] Response output item added:`, event.item?.type);
       break;
 
     case "response.audio.delta":
@@ -316,15 +434,15 @@ function handleModelMessage(data: RawData) {
           streamSid: session.streamSid,
         });
       } else {
-        console.log("Cannot send audio: missing twilioConn or streamSid");
+        console.log(`[${session.streamSid}] Cannot send audio: missing twilioConn or streamSid`);
       }
       break;
 
     case "response.output_item.done": {
       const { item } = event;
       if (item.type === "function_call") {
-        console.log("Function call completed:", item.name);
-        handleFunctionCall(item)
+        console.log(`[${session.streamSid}] Function call completed:`, item.name);
+        handleFunctionCall(item, session)
           .then((output) => {
             if (session.modelConn) {
               jsonSend(session.modelConn, {
@@ -339,7 +457,7 @@ function handleModelMessage(data: RawData) {
             }
           })
           .catch((err) => {
-            console.error("Error handling function call:", err);
+            console.error(`[${session.streamSid}] Error handling function call:`, err);
           });
       }
       break;
@@ -347,27 +465,29 @@ function handleModelMessage(data: RawData) {
 
     // CORRECTION: Ajouter handler pour les transcriptions
     case "conversation.item.input_audio_transcription.completed":
-      console.log("✅ Transcription reçue:", event.transcript);
+      console.log(`[${session.streamSid}] ✅ Transcription reçue:`, event.transcript);
       // Envoyer la transcription au frontend pour debug
-      if (session.frontendConn) {
-        jsonSend(session.frontendConn, {
+      if (frontendSession.frontendConn) {
+        jsonSend(frontendSession.frontendConn, {
           type: "transcription",
           transcript: event.transcript,
+          item_id: event.item_id,
+          streamSid: session.streamSid,
         });
       }
       break;
 
     case "conversation.item.input_audio_transcription.failed":
-      console.error("Input audio transcription failed:", event.error);
+      console.error(`[${session.streamSid}] Input audio transcription failed:`, event.error);
       // Si la transcription échoue, on peut quand même continuer
       break;
 
     case "response.done":
       if (event.response?.status === "failed") {
-        console.error("Response failed:", event.response.status_details);
+        console.error(`[${session.streamSid}] Response failed:`, event.response.status_details);
         // Si la réponse échoue, créer une nouvelle réponse pour continuer
         if (isOpen(session.modelConn)) {
-          console.log("Creating new response after failure...");
+          console.log(`[${session.streamSid}] Creating new response after failure...`);
           setTimeout(() => {
             if (isOpen(session.modelConn)) {
               jsonSend(session.modelConn, { type: "response.create" });
@@ -375,24 +495,24 @@ function handleModelMessage(data: RawData) {
           }, 500);
         }
       } else {
-        console.log("Response completed successfully:", event.response?.status);
+        console.log(`[${session.streamSid}] Response completed successfully:`, event.response?.status);
       }
       break;
 
     case "error":
-      console.error("Model error:", event);
+      console.error(`[${session.streamSid}] Model error:`, event);
       break;
 
     default:
       // CORRECTION: Logger tous les événements non gérés pour debugging
       if (!event.type.startsWith("response.audio_transcript")) {
-        console.log("Unhandled event type:", event.type, JSON.stringify(event).substring(0, 200));
+        console.log(`[${session.streamSid}] Unhandled event type:`, event.type, JSON.stringify(event).substring(0, 200));
       }
       break;
   }
 }
 
-function handleTruncation() {
+function handleTruncation(session: Session) {
   if (
     !session.lastAssistantItem ||
     session.responseStartTimestamp === undefined
@@ -423,40 +543,12 @@ function handleTruncation() {
   session.responseStartTimestamp = undefined;
 }
 
-function closeModel() {
+function closeModel(session: Session) {
   cleanupConnection(session.modelConn);
   session.modelConn = undefined;
   if (session.responseCreateTimeout) {
     clearTimeout(session.responseCreateTimeout);
   }
-  if (!session.twilioConn && !session.frontendConn) {
-    session = { audioBuffer: [], responseCreated: false };
-  }
-}
-
-function closeAllConnections() {
-  if (session.twilioConn) {
-    session.twilioConn.close();
-    session.twilioConn = undefined;
-  }
-  if (session.modelConn) {
-    session.modelConn.close();
-    session.modelConn = undefined;
-  }
-  if (session.frontendConn) {
-    session.frontendConn.close();
-    session.frontendConn = undefined;
-  }
-  if (session.responseCreateTimeout) {
-    clearTimeout(session.responseCreateTimeout);
-  }
-  session.streamSid = undefined;
-  session.lastAssistantItem = undefined;
-  session.responseStartTimestamp = undefined;
-  session.latestMediaTimestamp = undefined;
-  session.saved_config = undefined;
-  session.audioBuffer = [];
-  session.responseCreated = false;
 }
 
 function cleanupConnection(ws?: WebSocket) {
@@ -479,4 +571,3 @@ function jsonSend(ws: WebSocket | undefined, obj: unknown) {
 function isOpen(ws?: WebSocket): ws is WebSocket {
   return !!ws && ws.readyState === WebSocket.OPEN;
 }
-

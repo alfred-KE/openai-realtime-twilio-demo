@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Plus, Edit, Trash, Check, AlertCircle } from "lucide-react";
 import { toolTemplates } from "@/lib/tool-templates";
@@ -30,6 +31,10 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
     `You are a friendly, professional phone assistant. Speak naturally and conversationally, as if talking to a friend. Keep responses concise (2-3 sentences max) unless asked for details. Show empathy and understanding. If you don't understand something, ask for clarification politely. Avoid sounding robotic or overly formal. Match the caller's energy level and speaking style.`
   );
   const [voice, setVoice] = useState("ash");
+  const [temperature, setTemperature] = useState(0.7);
+  const [turnDetectionThreshold, setTurnDetectionThreshold] = useState(0.4);
+  const [turnDetectionSilence, setTurnDetectionSilence] = useState(1000);
+  const [model, setModel] = useState("gpt-4o-realtime-preview-2024-12-17");
   const [tools, setTools] = useState<string[]>([]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingSchemaStr, setEditingSchemaStr] = useState("");
@@ -47,7 +52,7 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   // Track changes to determine if there are unsaved modifications
   useEffect(() => {
     setHasUnsavedChanges(true);
-  }, [instructions, voice, tools]);
+  }, [instructions, voice, temperature, turnDetectionThreshold, turnDetectionSilence, model, tools]);
 
   // Reset save status after a delay when saved
   useEffect(() => {
@@ -65,6 +70,13 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
       await onSave({
         instructions,
         voice,
+        temperature,
+        turn_detection: {
+          type: "server_vad",
+          threshold: turnDetectionThreshold,
+          silence_duration_ms: turnDetectionSilence,
+        },
+        model,
         tools: tools.map((tool) => JSON.parse(tool)),
       });
       setSaveStatus("saved");
@@ -150,8 +162,8 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   };
 
   return (
-    <Card className="flex flex-col h-full w-full mx-auto">
-      <CardHeader className="pb-0 px-4 sm:px-6">
+    <Card className="flex flex-col h-full w-full mx-auto overflow-hidden">
+      <CardHeader className="flex-shrink-0 pb-0 px-4 sm:px-6">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base font-semibold">
             Session Configuration
@@ -173,9 +185,9 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="flex-1 p-3 sm:p-5">
+      <CardContent className="flex-1 min-h-0 p-3 sm:p-5 overflow-hidden">
         <ScrollArea className="h-full">
-          <div className="space-y-4 sm:space-y-6 m-1">
+          <div className="space-y-4 sm:space-y-6 pr-4">
             <div className="space-y-2">
               <label className="text-sm font-medium leading-none">
                 Instructions
@@ -195,11 +207,86 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
                   <SelectValue placeholder="Select voice" />
                 </SelectTrigger>
                 <SelectContent>
-                  {["ash", "ballad", "coral", "sage", "verse"].map((v) => (
+                  {["ash", "alloy", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"].map((v) => (
                     <SelectItem key={v} value={v}>
                       {v}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium leading-none">
+                Temperature: {temperature.toFixed(1)}
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={temperature}
+                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Precise (0.0)</span>
+                <span>Balanced (0.5)</span>
+                <span>Creative (1.0)</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium leading-none">
+                Turn Detection Threshold: {turnDetectionThreshold.toFixed(1)}
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.1"
+                value={turnDetectionThreshold}
+                onChange={(e) => setTurnDetectionThreshold(parseFloat(e.target.value))}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Very Sensitive</span>
+                <span>Balanced</span>
+                <span>Less Sensitive</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium leading-none">
+                Silence Duration (ms)
+              </label>
+              <Input
+                type="number"
+                min="200"
+                max="2000"
+                step="50"
+                value={turnDetectionSilence}
+                onChange={(e) => setTurnDetectionSilence(parseInt(e.target.value) || 1000)}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground">
+                Time to wait before considering speech ended (200-2000ms)
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium leading-none">Model</label>
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gpt-4o-realtime-preview-2024-12-17">
+                    gpt-4o-realtime-preview-2024-12-17
+                  </SelectItem>
+                  <SelectItem value="gpt-4o-realtime-preview-2024-10-01">
+                    gpt-4o-realtime-preview-2024-10-01
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -251,24 +338,26 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
               </div>
             </div>
 
-            <Button
-              className="w-full mt-4"
-              onClick={handleSave}
-              disabled={saveStatus === "saving" || !hasUnsavedChanges}
-            >
-              {saveStatus === "saving" ? (
-                "Saving..."
-              ) : saveStatus === "saved" ? (
-                <span className="flex items-center">
-                  Saved Successfully
-                  <Check className="ml-2 h-4 w-4" />
-                </span>
-              ) : saveStatus === "error" ? (
-                "Error Saving"
-              ) : (
-                "Save Configuration"
-              )}
-            </Button>
+            <div className="pt-4 pb-2">
+              <Button
+                className="w-full"
+                onClick={handleSave}
+                disabled={saveStatus === "saving" || !hasUnsavedChanges}
+              >
+                {saveStatus === "saving" ? (
+                  "Saving..."
+                ) : saveStatus === "saved" ? (
+                  <span className="flex items-center">
+                    Saved Successfully
+                    <Check className="ml-2 h-4 w-4" />
+                  </span>
+                ) : saveStatus === "error" ? (
+                  "Error Saving"
+                ) : (
+                  "Save Configuration"
+                )}
+              </Button>
+            </div>
           </div>
         </ScrollArea>
       </CardContent>

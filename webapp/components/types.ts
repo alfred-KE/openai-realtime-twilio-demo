@@ -13,6 +13,15 @@ export type Item = {
   params?: Record<string, any>;
   // For "function_call_output" items
   output?: string;
+  // For multi-call support
+  streamSid?: string;
+};
+
+export type CallSession = {
+  streamSid: string;
+  items: Item[];
+  startTime: Date;
+  phoneNumber?: string;
 };
 
 export interface PhoneNumber {

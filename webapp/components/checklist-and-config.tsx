@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Circle, CheckCircle, Loader2 } from "lucide-react";
+import { Circle, CheckCircle, Loader2, Trash2 } from "lucide-react";
 import { PhoneNumber } from "@/components/types";
 import {
   Select,
@@ -44,6 +44,7 @@ export default function ChecklistAndConfig({
   const [allChecksPassed, setAllChecksPassed] = useState(false);
   const [webhookLoading, setWebhookLoading] = useState(false);
   const [ngrokLoading, setNgrokLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const appendedTwimlUrl = publicUrl ? `${publicUrl}/twiml` : "";
   const isWebhookMismatch =
@@ -65,14 +66,48 @@ export default function ChecklistAndConfig({
         if (!res.ok) throw new Error("Failed to fetch phone numbers");
         const numbersData = await res.json();
         if (Array.isArray(numbersData) && numbersData.length > 0) {
-          setPhoneNumbers(numbersData);
-          // If currentNumberSid not set or not in the list, use first
-          const selected =
-            numbersData.find((p: PhoneNumber) => p.sid === currentNumberSid) ||
-            numbersData[0];
-          setCurrentNumberSid(selected.sid);
-          setCurrentVoiceUrl(selected.voiceUrl || "");
-          setSelectedPhoneNumber(selected.friendlyName || "");
+          setPhoneNumbers((prevNumbers) => {
+            // Only update if the list actually changed
+            const prevSids = prevNumbers.map((p) => p.sid).sort().join(",");
+            const newSids = numbersData.map((p: PhoneNumber) => p.sid).sort().join(",");
+            if (prevSids === newSids) {
+              return prevNumbers; // No change, keep previous state
+            }
+            return numbersData;
+          });
+          
+          // Only update currentNumberSid if it's not set or the selected number is no longer in the list
+          setCurrentNumberSid((prevSid) => {
+            if (!prevSid) {
+              // No number selected, use first
+              const first = numbersData[0];
+              setCurrentVoiceUrl(first.voiceUrl || "");
+              setSelectedPhoneNumber(first.friendlyName || "");
+              return first.sid;
+            }
+            const selected = numbersData.find((p: PhoneNumber) => p.sid === prevSid);
+            if (selected) {
+              // Selected number still exists, update its URL if needed
+              setCurrentVoiceUrl((prevUrl) => {
+                if (prevUrl !== selected.voiceUrl) {
+                  return selected.voiceUrl || "";
+                }
+                return prevUrl;
+              });
+              setSelectedPhoneNumber((prevName) => {
+                if (prevName !== selected.friendlyName) {
+                  return selected.friendlyName || "";
+                }
+                return prevName;
+              });
+              return prevSid; // Keep the same selection
+            }
+            // Selected number no longer exists, use first
+            const first = numbersData[0];
+            setCurrentVoiceUrl(first.voiceUrl || "");
+            setSelectedPhoneNumber(first.friendlyName || "");
+            return first.sid;
+          });
         }
 
         // 3. Check local server & public URL
@@ -83,13 +118,23 @@ export default function ChecklistAndConfig({
             const pubData = await resLocal.json();
             foundPublicUrl = pubData?.publicUrl || "";
             setLocalServerUp(true);
-            setPublicUrl(foundPublicUrl);
+            setPublicUrl((prevUrl) => {
+              if (prevUrl !== foundPublicUrl) {
+                return foundPublicUrl;
+              }
+              return prevUrl;
+            });
           } else {
             throw new Error("Local server not responding");
           }
         } catch {
           setLocalServerUp(false);
-          setPublicUrl("");
+          setPublicUrl((prevUrl) => {
+            if (prevUrl !== "") {
+              return "";
+            }
+            return prevUrl;
+          });
         }
       } catch (err) {
         console.error(err);
@@ -102,7 +147,7 @@ export default function ChecklistAndConfig({
       polling = false;
       clearInterval(intervalId);
     };
-  }, [currentNumberSid, setSelectedPhoneNumber]);
+  }, [setSelectedPhoneNumber]);
 
   const updateWebhook = async () => {
     if (!currentNumberSid || !appendedTwimlUrl) return;
@@ -150,10 +195,34 @@ export default function ChecklistAndConfig({
     setNgrokLoading(false);
   };
 
+  const deletePhoneNumber = async () => {
+    if (!currentNumberSid) return;
+    if (!confirm(`Are you sure you want to delete this phone number? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      setDeleteLoading(true);
+      const res = await fetch(`/api/twilio/numbers?phoneNumberSid=${currentNumberSid}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete phone number");
+      // Remove from local state
+      setPhoneNumbers(phoneNumbers.filter((p) => p.sid !== currentNumberSid));
+      setCurrentNumberSid("");
+      setSelectedPhoneNumber("");
+      setCurrentVoiceUrl("");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete phone number. Please try again.");
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const checklist = useMemo(() => {
     return [
       {
-        label: "Set up Twilio account",
+        label: "Set up phone account",
         done: hasCredentials,
         description: "Then update account details in webapp/.env",
         field: (
@@ -161,42 +230,58 @@ export default function ChecklistAndConfig({
             className="w-full"
             onClick={() => window.open("https://console.twilio.com/", "_blank")}
           >
-            Open Twilio Console
+            Open Console
           </Button>
         ),
       },
       {
-        label: "Set up Twilio phone number",
+        label: "Set up phone number",
         done: phoneNumbers.length > 0,
         description: "Costs around $1.15/month",
         field:
           phoneNumbers.length > 0 ? (
-            phoneNumbers.length === 1 ? (
-              <Input value={phoneNumbers[0].friendlyName || ""} disabled />
-            ) : (
-              <Select
-                onValueChange={(value) => {
-                  setCurrentNumberSid(value);
-                  const selected = phoneNumbers.find((p) => p.sid === value);
-                  if (selected) {
-                    setSelectedPhoneNumber(selected.friendlyName || "");
-                    setCurrentVoiceUrl(selected.voiceUrl || "");
-                  }
-                }}
-                value={currentNumberSid}
+            <div className="flex gap-2 w-full">
+              {phoneNumbers.length === 1 ? (
+                <Input value={phoneNumbers[0].friendlyName || ""} disabled className="flex-1" />
+              ) : (
+                <Select
+                  onValueChange={(value) => {
+                    setCurrentNumberSid(value);
+                    const selected = phoneNumbers.find((p) => p.sid === value);
+                    if (selected) {
+                      setSelectedPhoneNumber(selected.friendlyName || "");
+                      setCurrentVoiceUrl(selected.voiceUrl || "");
+                    }
+                  }}
+                  value={currentNumberSid}
+                  className="flex-1"
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a phone number" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {phoneNumbers.map((phone) => (
+                      <SelectItem key={phone.sid} value={phone.sid}>
+                        {phone.friendlyName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={deletePhoneNumber}
+                disabled={deleteLoading || !currentNumberSid}
+                className="flex-shrink-0"
               >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a phone number" />
-                </SelectTrigger>
-                <SelectContent>
-                  {phoneNumbers.map((phone) => (
-                    <SelectItem key={phone.sid} value={phone.sid}>
-                      {phone.friendlyName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )
+                {deleteLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
           ) : (
             <Button
               className="w-full"
@@ -207,7 +292,7 @@ export default function ChecklistAndConfig({
                 )
               }
             >
-              Set up Twilio phone number
+              Set up phone number
             </Button>
           ),
       },
@@ -244,9 +329,9 @@ export default function ChecklistAndConfig({
         ),
       },
       {
-        label: "Update Twilio webhook URL",
+        label: "Update webhook URL",
         done: !!publicUrl && !isWebhookMismatch,
-        description: "Can also be done manually in Twilio console",
+        description: "Can also be done manually in console",
         field: (
           <div className="flex items-center gap-2 w-full">
             <div className="flex-1">

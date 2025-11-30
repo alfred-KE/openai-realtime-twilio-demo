@@ -57,15 +57,15 @@ const FunctionCallsPanel: React.FC<FunctionCallsPanelProps> = ({
   };
 
   return (
-    <Card className="flex flex-col h-full">
-      <CardHeader className="space-y-1.5 pb-0">
+    <Card className="flex flex-col h-full overflow-hidden">
+      <CardHeader className="flex-shrink-0 space-y-1.5 pb-0">
         <CardTitle className="text-base font-semibold">
           Function Calls
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex-1 p-4">
+      <CardContent className="flex-1 min-h-0 p-4 overflow-hidden">
         <ScrollArea className="h-full">
-          <div className="space-y-4">
+          <div className="space-y-4 pr-4">
             {functionCallsWithStatus.map((call) => (
               <div
                 key={call.id}

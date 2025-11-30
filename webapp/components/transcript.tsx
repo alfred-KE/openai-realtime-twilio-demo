@@ -6,9 +6,10 @@ import { Item } from "@/components/types";
 
 type TranscriptProps = {
   items: Item[];
+  showStreamSid?: boolean;
 };
 
-const Transcript: React.FC<TranscriptProps> = ({ items }) => {
+const Transcript: React.FC<TranscriptProps> = ({ items, showStreamSid = false }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,6 +83,11 @@ const Transcript: React.FC<TranscriptProps> = ({ items }) => {
                           ? "Tool Response"
                           : "Assistant"}
                       </span>
+                      {showStreamSid && msg.streamSid && (
+                        <span className="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">
+                          {msg.streamSid.substring(0, 8)}...
+                        </span>
+                      )}
                       <span className="text-xs text-muted-foreground">
                         {msg.timestamp}
                       </span>
