@@ -3,7 +3,8 @@ import { Item } from "@/components/types";
 export default function handleRealtimeEvent(
   ev: any,
   setItems: React.Dispatch<React.SetStateAction<Item[]>>,
-  streamSid?: string
+  streamSid?: string,
+  onCallEnded?: (streamSid: string, items: Item[]) => void
 ) {
   // Helper function to create a new item with default fields
   function createNewItem(base: Partial<Item>): Item {
@@ -43,9 +44,21 @@ export default function handleRealtimeEvent(
 
   switch (type) {
     case "call.ended": {
-      // Retirer tous les items de cet appel de la liste
+      // Récupérer tous les items de cet appel avant de les retirer
       if (eventStreamSid) {
-        setItems((prev) => prev.filter((item) => item.streamSid !== eventStreamSid));
+        setItems((prev) => {
+          // Filtrer les items de cet appel
+          const callItems = prev.filter((item) => item.streamSid === eventStreamSid);
+          
+          // Appeler le callback pour sauvegarder les items
+          if (onCallEnded && callItems.length > 0) {
+            console.log(`[${eventStreamSid}] Saving ${callItems.length} items before removing from live transcript`);
+            onCallEnded(eventStreamSid, callItems);
+          }
+          
+          // Retirer les items de la liste
+          return prev.filter((item) => item.streamSid !== eventStreamSid);
+        });
         console.log(`Call ended for streamSid: ${eventStreamSid}, items removed from live transcript`);
       }
       break;

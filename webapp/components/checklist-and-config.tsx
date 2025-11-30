@@ -82,36 +82,14 @@ export default function ChecklistAndConfig({
           setCurrentNumberSid((prevSid) => {
             if (!prevSid) {
               // No number selected, use first
-              const first = numbersData[0];
-              setCurrentVoiceUrl(first.voiceUrl || "");
-              setSelectedPhoneNumber(first.friendlyName || "");
-              setSelectedPhoneNumberSid(first.sid || "");
-              return first.sid;
+              return numbersData[0]?.sid || "";
             }
             const selected = numbersData.find((p: PhoneNumber) => p.sid === prevSid);
             if (selected) {
-              // Selected number still exists, update its URL if needed
-              setCurrentVoiceUrl((prevUrl) => {
-                if (prevUrl !== selected.voiceUrl) {
-                  return selected.voiceUrl || "";
-                }
-                return prevUrl;
-              });
-              setSelectedPhoneNumber((prevName) => {
-                if (prevName !== selected.friendlyName) {
-                  return selected.friendlyName || "";
-                }
-                return prevName;
-              });
-              setSelectedPhoneNumberSid(selected.sid || "");
               return prevSid; // Keep the same selection
             }
             // Selected number no longer exists, use first
-            const first = numbersData[0];
-            setCurrentVoiceUrl(first.voiceUrl || "");
-            setSelectedPhoneNumber(first.friendlyName || "");
-            setSelectedPhoneNumberSid(first.sid || "");
-            return first.sid;
+            return numbersData[0]?.sid || "";
           });
         }
 
@@ -166,7 +144,26 @@ export default function ChecklistAndConfig({
       polling = false;
       clearInterval(intervalId);
     };
-  }, [setSelectedPhoneNumber]);
+  }, [setSelectedPhoneNumber, setSelectedPhoneNumberSid]);
+
+  // Synchroniser currentNumberSid avec selectedPhoneNumber et selectedPhoneNumberSid
+  useEffect(() => {
+    if (!currentNumberSid || phoneNumbers.length === 0) return;
+    
+    const selected = phoneNumbers.find((p) => p.sid === currentNumberSid);
+    if (selected) {
+      // Mettre à jour les valeurs seulement si elles ont changé
+      if (selected.friendlyName !== selectedPhoneNumber) {
+        setSelectedPhoneNumber(selected.friendlyName || "");
+      }
+      if (selected.sid !== selectedPhoneNumberSid) {
+        setSelectedPhoneNumberSid(selected.sid || "");
+      }
+      if (selected.voiceUrl !== currentVoiceUrl) {
+        setCurrentVoiceUrl(selected.voiceUrl || "");
+      }
+    }
+  }, [currentNumberSid, phoneNumbers, selectedPhoneNumber, selectedPhoneNumberSid, currentVoiceUrl, setSelectedPhoneNumber, setSelectedPhoneNumberSid]);
 
   const updateWebhook = async () => {
     if (!currentNumberSid || !appendedTwimlUrl) return;

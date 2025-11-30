@@ -53,8 +53,16 @@ const Transcript: React.FC<TranscriptProps> = ({ items, showStreamSid = false })
               const Icon = isUser ? Phone : isTool ? Wrench : Bot;
 
               // Combine all text parts into a single string for display
+              // Handle both array format and object format
               const displayText = msg.content
-                ? msg.content.map((c) => c.text).join("")
+                ? Array.isArray(msg.content)
+                  ? msg.content
+                      .filter((c) => c && (c.type === "text" || c.text))
+                      .map((c) => c.text || "")
+                      .join("")
+                  : typeof msg.content === "string"
+                  ? msg.content
+                  : ""
                 : "";
 
               return (

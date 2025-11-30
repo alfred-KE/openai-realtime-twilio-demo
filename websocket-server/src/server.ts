@@ -134,25 +134,34 @@ app.delete("/api/conversations/stream/:streamSid", (req, res) => {
   }
 });
 
-// Save items for a conversation (called from frontend)
+// Save items for a conversation (called from frontend when call ends)
 app.post("/api/conversations/stream/:streamSid/items", (req, res) => {
+  const { streamSid } = req.params;
   try {
-    const { streamSid } = req.params;
     const { items } = req.body;
     
     const conversation = db.getConversationByStreamSid(streamSid);
     if (!conversation) {
+      console.error(`[${streamSid}] Conversation not found when saving items`);
       res.status(404).json({ error: "Conversation not found" });
       return;
     }
     
     if (Array.isArray(items) && items.length > 0) {
+      console.log(`[${streamSid}] Saving ${items.length} items from frontend to conversation ${conversation.id}`);
       db.saveConversationItems(conversation.id, items);
+      
+      // Mettre à jour le message_count et ended_at
+      const messageCount = items.filter((item: any) => item.type === "message").length;
+      db.endConversation(streamSid, messageCount);
+      console.log(`[${streamSid}] Conversation updated: ${messageCount} messages, ended_at set`);
+    } else {
+      console.log(`[${streamSid}] No items to save`);
     }
     
     res.json({ success: true });
   } catch (err: any) {
-    console.error("Error saving conversation items:", err);
+    console.error(`[${streamSid}] Error saving conversation items:`, err);
     res.status(500).json({ error: err.message });
   }
 });

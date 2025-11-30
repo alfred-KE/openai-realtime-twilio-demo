@@ -36,12 +36,22 @@ export const getWebSocketLogsUrl = (): string => {
 
 /**
  * Get the HTTP URL for API endpoints
+ * Automatically adds /api/ prefix for conversation endpoints
  */
 export const getApiUrl = (endpoint: string = ""): string => {
   const baseUrl = getBaseUrl();
   // Remove trailing slash from baseUrl and leading slash from endpoint
   const cleanBase = baseUrl.replace(/\/$/, "");
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  
+  // Endpoints that don't need /api/ prefix
+  const noApiPrefix = ["public-url", "tools"];
+  const needsApiPrefix = endpoint && !noApiPrefix.some(ep => endpoint.startsWith(ep));
+  
+  // Add /api/ prefix if needed and not already present
+  if (needsApiPrefix && !cleanEndpoint.startsWith("/api/")) {
+    return `${cleanBase}/api${cleanEndpoint}`;
+  }
   return `${cleanBase}${cleanEndpoint}`;
 };
 

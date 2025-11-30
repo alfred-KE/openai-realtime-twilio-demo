@@ -110,9 +110,27 @@ const CallInterface = () => {
   // Charger une conversation depuis l'historique
   const handleLoadConversation = async (streamSid: string) => {
     try {
+      console.log(`[handleLoadConversation] Loading conversation for streamSid: ${streamSid}`);
       const res = await fetch(getApiUrl(`conversations/stream/${streamSid}`));
       if (!res.ok) throw new Error("Failed to load conversation");
       const data = await res.json();
+      console.log(`[handleLoadConversation] Loaded conversation with ${data.items?.length || 0} items`);
+      
+      // Log du contenu de chaque item pour déboguer
+      if (data.items) {
+        data.items.forEach((item: Item, idx: number) => {
+          const contentInfo = item.content 
+            ? `content: ${JSON.stringify(item.content).substring(0, 100)}`
+            : 'no content';
+          console.log(`[handleLoadConversation] Item ${idx + 1}:`, {
+            id: item.id,
+            type: item.type,
+            role: item.role,
+            contentLength: item.content?.length || 0,
+            contentInfo: contentInfo
+          });
+        });
+      }
       
       // Ajouter le streamSid aux items
       const itemsWithStreamSid = data.items.map((item: Item) => ({
@@ -162,7 +180,43 @@ const CallInterface = () => {
           });
         }
         
-        handleRealtimeEvent(data, setAllItems, streamSid);
+        // Callback pour sauvegarder les items quand l'appel se termine
+        const handleCallEnded = async (endedStreamSid: string, items: Item[]) => {
+          console.log(`[${endedStreamSid}] 💾 Call ended - Saving ${items.length} items to database`);
+          // Log détaillé du contenu de chaque item
+          items.forEach((item, idx) => {
+            const contentPreview = item.content 
+              ? item.content.map(c => `${c.type}:${c.text ? c.text.substring(0, 50) : 'no text'}`).join(', ')
+              : 'no content';
+            console.log(`[${endedStreamSid}] Item ${idx + 1}:`, {
+              id: item.id,
+              type: item.type,
+              role: item.role,
+              contentLength: item.content?.length || 0,
+              contentPreview: contentPreview
+            });
+          });
+          try {
+            const apiUrl = getApiUrl(`conversations/stream/${endedStreamSid}/items`);
+            console.log(`[${endedStreamSid}] POST to: ${apiUrl}`);
+            const res = await fetch(apiUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ items }),
+            });
+            if (res.ok) {
+              const result = await res.json();
+              console.log(`[${endedStreamSid}] ✅ Items saved successfully:`, result);
+            } else {
+              const errorText = await res.text();
+              console.error(`[${endedStreamSid}] ❌ Failed to save items (${res.status}):`, errorText);
+            }
+          } catch (err) {
+            console.error(`[${endedStreamSid}] ❌ Error saving items:`, err);
+          }
+        };
+        
+        handleRealtimeEvent(data, setAllItems, streamSid, handleCallEnded);
       };
 
       newWs.onclose = () => {
@@ -205,9 +259,9 @@ const CallInterface = () => {
                 }
               }}
             />
-            {selectedPhoneNumber && (
+            {selectedPhoneNumberSid && (
               <ConversationHistory
-                phoneNumber={selectedPhoneNumber}
+                phoneNumberSid={selectedPhoneNumberSid}
                 onLoadConversation={handleLoadConversation}
               />
             )}

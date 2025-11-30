@@ -426,6 +426,36 @@ function handleModelMessage(data: RawData, session: Session) {
   };
   jsonSend(frontendSession.frontendConn, eventWithStreamSid);
 
+  // Fonction helper pour mettre à jour ou créer un item dans session.items
+  const updateOrCreateItem = (itemId: string, updates: Partial<Item>) => {
+    if (!session.items) {
+      session.items = [];
+    }
+    const existingIndex = session.items.findIndex((item) => item.id === itemId);
+    if (existingIndex >= 0) {
+      // Mettre à jour l'item existant
+      session.items[existingIndex] = {
+        ...session.items[existingIndex],
+        ...updates,
+      };
+      console.log(`[${session.streamSid}] Item updated in session.items:`, itemId, updates);
+    } else {
+      // Créer un nouvel item
+      const newItem: Item = {
+        id: itemId,
+        type: "message",
+        role: "user",
+        content: [],
+        status: "running",
+        timestamp: new Date().toISOString(),
+        streamSid: session.streamSid,
+        ...updates,
+      };
+      session.items.push(newItem);
+      console.log(`[${session.streamSid}] Item created in session.items:`, itemId, updates);
+    }
+  };
+
   // Stocker les items créés dans session.items pour sauvegarde
   if (event.type === "conversation.item.created" && event.item) {
     if (!session.items) {
@@ -558,6 +588,13 @@ function handleModelMessage(data: RawData, session: Session) {
           .catch((err) => {
             console.error(`[${session.streamSid}] Error handling function call:`, err);
           });
+      } else if (item.type === "message") {
+        // Marquer l'item message comme complété quand la réponse est terminée
+        updateOrCreateItem(item.id, {
+          role: "assistant",
+          content: item.content || [],
+          status: "completed",
+        });
       }
       break;
     }
@@ -565,6 +602,14 @@ function handleModelMessage(data: RawData, session: Session) {
     // CORRECTION: Ajouter handler pour les transcriptions
     case "conversation.item.input_audio_transcription.completed":
       console.log(`[${session.streamSid}] ✅ Transcription reçue:`, event.transcript);
+      // Mettre à jour l'item user avec la transcription
+      if (event.item_id && event.transcript) {
+        updateOrCreateItem(event.item_id, {
+          role: "user",
+          content: [{ type: "text", text: event.transcript }],
+          status: "completed",
+        });
+      }
       // Envoyer la transcription au frontend pour debug
       if (frontendSession.frontendConn) {
         jsonSend(frontendSession.frontendConn, {
@@ -600,6 +645,97 @@ function handleModelMessage(data: RawData, session: Session) {
 
     case "error":
       console.error(`[${session.streamSid}] Model error:`, event);
+      break;
+
+    case "response.content_part.added":
+      // Mettre à jour le contenu de l'item assistant avec le texte
+      if (event.item_id && event.part && event.part.type === "text" && event.output_index === 0) {
+        const existingItem = session.items?.find((item) => item.id === event.item_id);
+        if (existingItem) {
+          // Consolider le contenu existant en un seul texte, puis ajouter le nouveau texte
+          const existingContent = existingItem.content || [];
+          const existingText = existingContent
+            .filter((c: any) => c && (c.type === "text" || c.text))
+            .map((c: any) => c.text || "")
+            .join("");
+          const newText = existingText + (event.part.text || "");
+          updateOrCreateItem(event.item_id, {
+            role: "assistant",
+            content: [{ type: "text", text: newText }],
+            status: "running",
+          });
+        } else {
+          // Créer un nouvel item si il n'existe pas
+          updateOrCreateItem(event.item_id, {
+            role: "assistant",
+            content: [{ type: "text", text: event.part.text || "" }],
+            status: "running",
+          });
+        }
+      }
+      break;
+
+    case "response.audio_transcript.delta":
+      // Mettre à jour le contenu de l'item assistant avec le transcript audio
+      if (event.item_id && event.delta && event.output_index === 0) {
+        const existingItem = session.items?.find((item) => item.id === event.item_id);
+        if (existingItem) {
+          // Consolider le contenu existant en un seul texte, puis ajouter le delta
+          const existingContent = existingItem.content || [];
+          const existingText = existingContent
+            .filter((c: any) => c && (c.type === "text" || c.text))
+            .map((c: any) => c.text || "")
+            .join("");
+          const newText = existingText + (event.delta || "");
+          const updatedContent = [{ type: "text", text: newText }];
+          updateOrCreateItem(event.item_id, {
+            role: "assistant",
+            content: updatedContent,
+            status: "running",
+          });
+          console.log(`[${session.streamSid}] Updated item ${event.item_id} with audio_transcript delta:`, newText.substring(0, 50));
+        } else {
+          // Créer un nouvel item si il n'existe pas
+          updateOrCreateItem(event.item_id, {
+            role: "assistant",
+            content: [{ type: "text", text: event.delta || "" }],
+            status: "running",
+          });
+          console.log(`[${session.streamSid}] Created new item ${event.item_id} with audio_transcript delta:`, event.delta?.substring(0, 50));
+        }
+      }
+      break;
+
+    case "response.output_item.done":
+      // Marquer l'item comme complété quand la réponse est terminée
+      if (event.item && event.item.type === "message") {
+        // Utiliser le contenu de session.items si disponible, sinon utiliser event.item.content
+        const existingItem = session.items?.find((item) => item.id === event.item.id);
+        const finalContent = existingItem?.content && existingItem.content.length > 0
+          ? existingItem.content
+          : (event.item.content || []);
+        
+        updateOrCreateItem(event.item.id, {
+          role: "assistant",
+          content: finalContent,
+          status: "completed",
+        });
+        
+        // Envoyer aussi un événement au frontend avec le contenu final pour s'assurer qu'il est à jour
+        if (frontendSession.frontendConn && finalContent.length > 0) {
+          jsonSend(frontendSession.frontendConn, {
+            type: "conversation.item.created",
+            item: {
+              id: event.item.id,
+              type: "message",
+              role: "assistant",
+              content: finalContent,
+              status: "completed",
+            },
+            streamSid: session.streamSid,
+          });
+        }
+      }
       break;
 
     default:

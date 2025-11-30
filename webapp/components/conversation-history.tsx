@@ -30,23 +30,59 @@ export default function ConversationHistory({
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const loadConversations = () => {
+  const loadConversations = async () => {
     if (!phoneNumberSid) {
+      console.log("[ConversationHistory] No phoneNumberSid, skipping load");
       setLoading(false);
       return;
     }
     
+    console.log(`[ConversationHistory] Loading conversations for phoneNumberSid: ${phoneNumberSid}`);
     setLoading(true);
-    fetch(getApiUrl(`conversations/phone-sid/${encodeURIComponent(phoneNumberSid)}`))
-      .then((res) => res.json())
-      .then((data) => {
+    try {
+      // D'abord, essayer de récupérer le numéro de téléphone depuis l'API Twilio
+      const numbersRes = await fetch("/api/twilio/numbers");
+      if (numbersRes.ok) {
+        const numbers = await numbersRes.json();
+        console.log(`[ConversationHistory] Found ${numbers.length} phone numbers from API`);
+        const selectedNumber = numbers.find((n: any) => n.sid === phoneNumberSid);
+        
+        if (selectedNumber) {
+          console.log(`[ConversationHistory] Selected number: ${selectedNumber.phoneNumber} (SID: ${phoneNumberSid})`);
+          
+          // Chercher par phoneNumberSid d'abord
+          let res = await fetch(getApiUrl(`conversations/phone-sid/${encodeURIComponent(phoneNumberSid)}`));
+          let data = await res.json();
+          console.log(`[ConversationHistory] Found ${data.length} conversations by phoneNumberSid`);
+          
+          // Si aucune conversation trouvée par SID, chercher par numéro de téléphone
+          if (data.length === 0 && selectedNumber.phoneNumber) {
+            console.log(`[ConversationHistory] Trying to find by phone number: ${selectedNumber.phoneNumber}`);
+            res = await fetch(getApiUrl(`conversations/phone/${encodeURIComponent(selectedNumber.phoneNumber)}`));
+            data = await res.json();
+            console.log(`[ConversationHistory] Found ${data.length} conversations by phone number`);
+          }
+          
+          console.log(`[ConversationHistory] Setting ${data.length} conversations`);
+          setConversations(data);
+        } else {
+          console.warn(`[ConversationHistory] Phone number with SID ${phoneNumberSid} not found in API response`);
+          setConversations([]);
+        }
+      } else {
+        console.error("[ConversationHistory] Failed to fetch phone numbers from API");
+        // Fallback: chercher directement par phoneNumberSid
+        const res = await fetch(getApiUrl(`conversations/phone-sid/${encodeURIComponent(phoneNumberSid)}`));
+        const data = await res.json();
+        console.log(`[ConversationHistory] Fallback: Found ${data.length} conversations by phoneNumberSid`);
         setConversations(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error("Error loading conversations:", err);
-        setLoading(false);
-      });
+      }
+    } catch (err) {
+      console.error("[ConversationHistory] Error loading conversations:", err);
+      setConversations([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
