@@ -15,6 +15,7 @@ import { toolTemplates } from "@/lib/tool-templates";
 import { ToolConfigurationDialog } from "./tool-configuration-dialog";
 import { BackendTag } from "./backend-tag";
 import { useBackendTools } from "@/lib/use-backend-tools";
+import { getToolsEndpoint } from "@/lib/websocket-url";
 
 interface SessionConfigurationPanelProps {
   callStatus: string;
@@ -26,7 +27,7 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   onSave,
 }) => {
   const [instructions, setInstructions] = useState(
-    "You are a helpful assistant in a phone call."
+    `You are a friendly, professional phone assistant. Speak naturally and conversationally, as if talking to a friend. Keep responses concise (2-3 sentences max) unless asked for details. Show empathy and understanding. If you don't understand something, ask for clarification politely. Avoid sounding robotic or overly formal. Match the caller's energy level and speaking style.`
   );
   const [voice, setVoice] = useState("ash");
   const [tools, setTools] = useState<string[]>([]);
@@ -41,7 +42,7 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   // Custom hook to fetch backend tools every 3 seconds
-  const backendTools = useBackendTools("http://localhost:8081/tools", 3000);
+  const backendTools = useBackendTools(getToolsEndpoint(), 3000);
 
   // Track changes to determine if there are unsaved modifications
   useEffect(() => {

@@ -9,6 +9,7 @@ import FunctionCallsPanel from "@/components/function-calls-panel";
 import { Item } from "@/components/types";
 import handleRealtimeEvent from "@/lib/handle-realtime-event";
 import PhoneNumberChecklist from "@/components/phone-number-checklist";
+import { getWebSocketLogsUrl } from "@/lib/websocket-url";
 
 const CallInterface = () => {
   const [selectedPhoneNumber, setSelectedPhoneNumber] = useState("");
@@ -19,7 +20,7 @@ const CallInterface = () => {
 
   useEffect(() => {
     if (allConfigsReady && !ws) {
-      const newWs = new WebSocket("ws://localhost:8081/logs");
+      const newWs = new WebSocket(getWebSocketLogsUrl());
 
       newWs.onopen = () => {
         console.log("Connected to logs websocket");

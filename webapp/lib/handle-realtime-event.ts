@@ -40,16 +40,29 @@ export default function handleRealtimeEvent(
     case "input_audio_buffer.speech_started": {
       // Create a user message item with running status and placeholder content
       const { item_id } = ev;
-      setItems((prev) => [
-        ...prev,
-        createNewItem({
-          id: item_id,
-          type: "message",
-          role: "user",
-          content: [{ type: "text", text: "..." }],
-          status: "running",
-        }),
-      ]);
+      console.log("🎤 Speech started, item_id:", item_id);
+      setItems((prev) => {
+        // Vérifier si l'item existe déjà pour éviter les doublons
+        const exists = prev.some((m) => m.id === item_id && m.role === "user");
+        if (exists) {
+          console.log("⚠️ Item user existe déjà, mise à jour du statut");
+          return prev.map((m) =>
+            m.id === item_id && m.role === "user"
+              ? { ...m, status: "running" }
+              : m
+          );
+        }
+        return [
+          ...prev,
+          createNewItem({
+            id: item_id,
+            type: "message",
+            role: "user",
+            content: [{ type: "text", text: "..." }],
+            status: "running",
+          }),
+        ];
+      });
       break;
     }
 
@@ -57,11 +70,13 @@ export default function handleRealtimeEvent(
       const { item } = ev;
       if (item.type === "message") {
         // A completed message from user or assistant
+        console.log("💬 Message créé:", item.id, "role:", item.role, "content:", item.content);
         const updatedContent =
           item.content && item.content.length > 0 ? item.content : [];
         setItems((prev) => {
           const idx = prev.findIndex((m) => m.id === item.id);
           if (idx >= 0) {
+            // Item existe, le mettre à jour
             const updated = [...prev];
             updated[idx] = {
               ...updated[idx],
@@ -73,6 +88,8 @@ export default function handleRealtimeEvent(
             };
             return updated;
           } else {
+            // Item n'existe pas, le créer
+            console.log("➕ Création d'un nouveau message:", item.role);
             return [
               ...prev,
               createNewItem({
@@ -119,17 +136,33 @@ export default function handleRealtimeEvent(
     case "conversation.item.input_audio_transcription.completed": {
       // Update the user message with the final transcript
       const { item_id, transcript } = ev;
-      setItems((prev) =>
-        prev.map((m) =>
-          m.id === item_id && m.type === "message" && m.role === "user"
-            ? {
-                ...m,
-                content: [{ type: "text", text: transcript }],
-                status: "completed",
-              }
-            : m
-        )
-      );
+      console.log("📝 Transcription complétée pour item:", item_id, "transcript:", transcript);
+      setItems((prev) => {
+        const idx = prev.findIndex((m) => m.id === item_id && m.type === "message" && m.role === "user");
+        if (idx >= 0) {
+          // Item existe, le mettre à jour
+          const updated = [...prev];
+          updated[idx] = {
+            ...updated[idx],
+            content: [{ type: "text", text: transcript || "" }],
+            status: "completed",
+          };
+          return updated;
+        } else {
+          // Item n'existe pas, le créer
+          console.log("⚠️ Item user non trouvé, création d'un nouveau item avec transcription");
+          return [
+            ...prev,
+            createNewItem({
+              id: item_id,
+              type: "message",
+              role: "user",
+              content: [{ type: "text", text: transcript || "" }],
+              status: "completed",
+            }),
+          ];
+        }
+      });
       break;
     }
 

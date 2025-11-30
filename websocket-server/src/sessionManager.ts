@@ -199,11 +199,12 @@ function tryConnectModel() {
         modalities: ["text", "audio"],
         turn_detection: {
           type: "server_vad",
-          threshold: 0.8,                 // moins sensible → évite les coupures
-          silence_duration_ms: 650        // attend plus longtemps avant de considérer que tu as fini
+          threshold: 0.4,                 // Encore plus sensible → capture mieux toute la parole
+          silence_duration_ms: 1000       // Attend 1 seconde → évite de couper les phrases
         },
         voice: "ash",
-        input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+        temperature: 0.7,                // Plus naturel tout en restant cohérent
+        input_audio_transcription: { model: "gpt-4o-transcribe" },  // Modèle plus précis pour mieux comprendre
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         tools: functionSchemas.length > 0 ? functionSchemas : undefined,
@@ -346,7 +347,14 @@ function handleModelMessage(data: RawData) {
 
     // CORRECTION: Ajouter handler pour les transcriptions
     case "conversation.item.input_audio_transcription.completed":
-      console.log("Input audio transcription completed:", event.transcript);
+      console.log("✅ Transcription reçue:", event.transcript);
+      // Envoyer la transcription au frontend pour debug
+      if (session.frontendConn) {
+        jsonSend(session.frontendConn, {
+          type: "transcription",
+          transcript: event.transcript,
+        });
+      }
       break;
 
     case "conversation.item.input_audio_transcription.failed":
