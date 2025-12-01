@@ -10,7 +10,6 @@ import CallSelector from "@/components/call-selector";
 import ConversationHistory from "@/components/conversation-history";
 import { Item } from "@/components/types";
 import handleRealtimeEvent from "@/lib/handle-realtime-event";
-import PhoneNumberChecklist from "@/components/phone-number-checklist";
 import { getWebSocketLogsUrl, getApiUrl } from "@/lib/websocket-url";
 
 const CallInterface = () => {
@@ -269,11 +268,6 @@ const CallInterface = () => {
 
           {/* Middle Column: Transcript */}
           <div className="col-span-6 flex flex-col gap-4 h-full overflow-hidden">
-            <PhoneNumberChecklist
-              selectedPhoneNumber={selectedPhoneNumber}
-              allConfigsReady={allConfigsReady}
-              setAllConfigsReady={setAllConfigsReady}
-            />
             <CallSelector
               activeCalls={activeCalls}
               selectedStreamSid={selectedStreamSid}
