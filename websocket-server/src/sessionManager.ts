@@ -83,6 +83,12 @@ function getSession(streamSid?: string): Session | null {
   return sessions.get(streamSid) || null;
 }
 
+// Export function to get session items for saving
+export function getSessionItems(streamSid: string): Item[] | undefined {
+  const session = sessions.get(streamSid);
+  return session?.items;
+}
+
 // Fonction helper pour nettoyer une session
 function cleanupSession(streamSid: string) {
   const session = sessions.get(streamSid);
@@ -417,7 +423,7 @@ function handleModelMessage(data: RawData, session: Session) {
     return;
   }
 
-  console.log(`[${session.streamSid}] Model event received:`, event.type);
+  console.log(`[${session.streamSid}] Model event received:`, event.type, event.type.includes("content") || event.type.includes("transcript") ? JSON.stringify(event).substring(0, 200) : "");
 
   // Envoyer au frontend (une seule connexion frontend partagée) avec streamSid
   const eventWithStreamSid = {
@@ -479,8 +485,23 @@ function handleModelMessage(data: RawData, session: Session) {
       output: typeof event.item.output === "string" ? event.item.output : 
               event.item.output ? JSON.stringify(event.item.output) : undefined,
     };
-    session.items.push(item);
-    console.log(`[${session.streamSid}] Item stored in session.items:`, item.id, item.type);
+    
+    // Vérifier si l'item existe déjà (peut arriver si response.content_part.added arrive avant)
+    const existingIndex = session.items.findIndex((i) => i.id === item.id);
+    if (existingIndex >= 0) {
+      // Mettre à jour l'item existant mais préserver le contenu s'il existe déjà
+      const existingContent = session.items[existingIndex].content || [];
+      if (existingContent.length > 0) {
+        // Préserver le contenu existant
+        item.content = existingContent;
+        console.log(`[${session.streamSid}] Item ${item.id} already exists with content, preserving existing content`);
+      }
+      session.items[existingIndex] = item;
+    } else {
+      session.items.push(item);
+    }
+    
+    console.log(`[${session.streamSid}] Item stored in session.items:`, item.id, item.type, item.role, `content length: ${item.content?.length || 0}`);
   }
 
   switch (event.type) {
@@ -590,11 +611,33 @@ function handleModelMessage(data: RawData, session: Session) {
           });
       } else if (item.type === "message") {
         // Marquer l'item message comme complété quand la réponse est terminée
+        // Utiliser le contenu de session.items si disponible (il a été mis à jour par response.audio_transcript.delta)
+        const existingItem = session.items?.find((i) => i.id === item.id);
+        let finalContent = existingItem?.content && existingItem.content.length > 0
+          ? existingItem.content
+          : (item.content || []);
+        
+        // CORRECTION: Convertir le contenu audio en contenu texte si nécessaire
+        finalContent = finalContent.map((c: any) => {
+          if (c && c.type === "audio" && c.transcript) {
+            // Convertir audio avec transcript en text
+            return { type: "text", text: c.transcript };
+          } else if (c && c.type === "text" && c.text) {
+            // Garder le texte tel quel
+            return { type: "text", text: c.text };
+          } else {
+            // Format inconnu, essayer de récupérer le texte
+            return { type: "text", text: c?.text || c?.transcript || "" };
+          }
+        }).filter((c: any) => c.text && c.text.length > 0); // Filtrer les contenus vides
+        
         updateOrCreateItem(item.id, {
           role: "assistant",
-          content: item.content || [],
+          content: finalContent,
           status: "completed",
         });
+        
+        console.log(`[${session.streamSid}] response.output_item.done: Final content for item ${item.id}:`, JSON.stringify(finalContent).substring(0, 200));
       }
       break;
     }
@@ -650,6 +693,7 @@ function handleModelMessage(data: RawData, session: Session) {
     case "response.content_part.added":
       // Mettre à jour le contenu de l'item assistant avec le texte
       if (event.item_id && event.part && event.part.type === "text" && event.output_index === 0) {
+        console.log(`[${session.streamSid}] response.content_part.added received for item ${event.item_id}, text: "${event.part.text?.substring(0, 50)}"`);
         const existingItem = session.items?.find((item) => item.id === event.item_id);
         if (existingItem) {
           // Consolider le contenu existant en un seul texte, puis ajouter le nouveau texte
@@ -664,6 +708,7 @@ function handleModelMessage(data: RawData, session: Session) {
             content: [{ type: "text", text: newText }],
             status: "running",
           });
+          console.log(`[${session.streamSid}] Updated existing item ${event.item_id} with content_part, total text length: ${newText.length}`);
         } else {
           // Créer un nouvel item si il n'existe pas
           updateOrCreateItem(event.item_id, {
@@ -671,6 +716,7 @@ function handleModelMessage(data: RawData, session: Session) {
             content: [{ type: "text", text: event.part.text || "" }],
             status: "running",
           });
+          console.log(`[${session.streamSid}] Created new item ${event.item_id} with content_part, text length: ${(event.part.text || "").length}`);
         }
       }
       break;
@@ -706,37 +752,6 @@ function handleModelMessage(data: RawData, session: Session) {
       }
       break;
 
-    case "response.output_item.done":
-      // Marquer l'item comme complété quand la réponse est terminée
-      if (event.item && event.item.type === "message") {
-        // Utiliser le contenu de session.items si disponible, sinon utiliser event.item.content
-        const existingItem = session.items?.find((item) => item.id === event.item.id);
-        const finalContent = existingItem?.content && existingItem.content.length > 0
-          ? existingItem.content
-          : (event.item.content || []);
-        
-        updateOrCreateItem(event.item.id, {
-          role: "assistant",
-          content: finalContent,
-          status: "completed",
-        });
-        
-        // Envoyer aussi un événement au frontend avec le contenu final pour s'assurer qu'il est à jour
-        if (frontendSession.frontendConn && finalContent.length > 0) {
-          jsonSend(frontendSession.frontendConn, {
-            type: "conversation.item.created",
-            item: {
-              id: event.item.id,
-              type: "message",
-              role: "assistant",
-              content: finalContent,
-              status: "completed",
-            },
-            streamSid: session.streamSid,
-          });
-        }
-      }
-      break;
 
     default:
       // CORRECTION: Logger tous les événements non gérés pour debugging

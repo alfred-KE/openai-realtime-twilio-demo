@@ -1,0 +1,19 @@
+[Unit]
+Description=Twilio WebSocket Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/openai-realtime-twilio-demo/websocket-server
+Environment="NODE_ENV=production"
+ExecStart=/usr/bin/npm run dev
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=twilio-websocket
+
+[Install]
+WantedBy=multi-user.target
+

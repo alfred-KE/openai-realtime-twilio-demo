@@ -9,6 +9,7 @@ import cors from "cors";
 import {
 handleCallConnection,
 handleFrontendConnection,
+getSessionItems,
 } from "./sessionManager";
 import functions from "./functionHandlers";
 import * as db from "./database";
@@ -138,7 +139,7 @@ app.delete("/api/conversations/stream/:streamSid", (req, res) => {
 app.post("/api/conversations/stream/:streamSid/items", (req, res) => {
   const { streamSid } = req.params;
   try {
-    const { items } = req.body;
+    const { items: frontendItems } = req.body;
     
     const conversation = db.getConversationByStreamSid(streamSid);
     if (!conversation) {
@@ -147,12 +148,29 @@ app.post("/api/conversations/stream/:streamSid/items", (req, res) => {
       return;
     }
     
-    if (Array.isArray(items) && items.length > 0) {
-      console.log(`[${streamSid}] Saving ${items.length} items from frontend to conversation ${conversation.id}`);
-      db.saveConversationItems(conversation.id, items);
+    // Utiliser les items de la session backend si disponibles (ils ont le contenu complet)
+    // Sinon utiliser les items du frontend
+    const sessionItems = getSessionItems(streamSid);
+    const itemsToSave = sessionItems && sessionItems.length > 0 
+      ? sessionItems 
+      : (Array.isArray(frontendItems) ? frontendItems : []);
+    
+    if (itemsToSave.length > 0) {
+      console.log(`[${streamSid}] Saving ${itemsToSave.length} items to conversation ${conversation.id} (from ${sessionItems ? 'backend session' : 'frontend'})`);
+      
+      // Log du contenu des items assistant pour déboguer
+      const assistantItems = itemsToSave.filter((item: any) => item.role === "assistant" && item.type === "message");
+      assistantItems.forEach((item: any, idx: number) => {
+        const contentText = item.content 
+          ? item.content.map((c: any) => c?.text || "").join("").substring(0, 100)
+          : "no content";
+        console.log(`[${streamSid}] Assistant item ${idx + 1} (${item.id}): content length=${item.content?.length || 0}, preview="${contentText}"`);
+      });
+      
+      db.saveConversationItems(conversation.id, itemsToSave);
       
       // Mettre à jour le message_count et ended_at
-      const messageCount = items.filter((item: any) => item.type === "message").length;
+      const messageCount = itemsToSave.filter((item: any) => item.type === "message").length;
       db.endConversation(streamSid, messageCount);
       console.log(`[${streamSid}] Conversation updated: ${messageCount} messages, ended_at set`);
     } else {

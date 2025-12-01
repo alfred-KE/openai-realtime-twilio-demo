@@ -1,0 +1,19 @@
+[Unit]
+Description=Twilio WebApp (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/openai-realtime-twilio-demo/webapp
+Environment="NODE_ENV=development"
+ExecStart=/usr/bin/npm run dev
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=twilio-webapp
+
+[Install]
+WantedBy=multi-user.target
+
