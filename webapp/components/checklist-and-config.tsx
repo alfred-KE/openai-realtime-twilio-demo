@@ -248,9 +248,8 @@ export default function ChecklistAndConfig({
                     }
                   }}
                   value={currentNumberSid}
-                  className="flex-1"
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full flex-1">
                     <SelectValue placeholder="Select a phone number" />
                   </SelectTrigger>
                   <SelectContent>

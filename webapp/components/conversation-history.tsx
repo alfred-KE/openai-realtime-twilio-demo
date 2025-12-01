@@ -11,6 +11,7 @@ interface Conversation {
   id: number;
   stream_sid: string;
   phone_number: string;
+  caller_number?: string;
   started_at: string;
   ended_at?: string;
   duration_seconds?: number;
@@ -191,6 +192,12 @@ export default function ConversationHistory({
                     </Button>
                   </div>
                   <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    {conv.caller_number && (
+                      <div className="flex items-center gap-1">
+                        <Phone className="h-3 w-3" />
+                        <span className="font-medium">{conv.caller_number}</span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-1">
                       <MessageSquare className="h-3 w-3" />
                       {conv.message_count} messages

@@ -13,6 +13,7 @@ export default function handleRealtimeEvent(
       timestamp: new Date().toLocaleTimeString(),
       streamSid: streamSid || base.streamSid,
       ...base,
+      status: base.status as "running" | "completed" | undefined,
     } as Item;
   }
 
@@ -92,7 +93,7 @@ export default function handleRealtimeEvent(
           console.log("⚠️ Item user existe déjà, mise à jour du statut");
           const updated = relevantItems.map((m) =>
             m.id === item_id && m.role === "user"
-              ? { ...m, status: "running", streamSid: eventStreamSid }
+              ? { ...m, status: "running" as const, streamSid: eventStreamSid }
               : m
           );
           return [...otherItems, ...updated];
@@ -188,7 +189,7 @@ export default function handleRealtimeEvent(
 
           const updated = newItems.map((m) =>
             m.call_id === item.call_id && m.type === "function_call"
-              ? { ...m, status: "completed" }
+              ? { ...m, status: "completed" as const }
               : m
           );
           return [...otherItems, ...updated];

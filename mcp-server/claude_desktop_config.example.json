@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "twilio-conversations": {
+      "command": "node",
+      "args": ["/home/ubuntu/KESIPInterface/mcp-server/dist/index.js"]
+    }
+  }
+}
+
